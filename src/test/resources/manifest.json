@@ -1,0 +1,11 @@
+{
+  "databricks": {
+    "lastSuccessfulWriteTimestamp": "1562112543752",
+    "totalProcessedRecordsCount": 71027,
+    "dataFilesPath": "databricks",
+    "schemaHistory": {
+      "301248659": "1562112543750",
+      "301248660": "1562112543752"
+    }
+  }
+}
