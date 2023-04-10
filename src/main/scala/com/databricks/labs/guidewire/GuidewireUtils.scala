@@ -3,11 +3,9 @@ package com.databricks.labs.guidewire
 import org.apache.avro.Schema
 import org.apache.avro.generic.GenericRecord
 import org.apache.commons.io.IOUtils
-import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.parquet.avro.AvroParquetReader
 import org.apache.parquet.hadoop.ParquetReader
 import org.apache.parquet.io.InputFile
-import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.avro.SchemaConverters
 import org.apache.spark.sql.types.StructType
 import org.json4s.DefaultFormats

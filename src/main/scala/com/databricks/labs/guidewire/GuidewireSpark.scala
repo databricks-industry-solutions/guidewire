@@ -3,7 +3,7 @@ package com.databricks.labs.guidewire
 import com.databricks.labs.guidewire.GuidewireUtils.readManifest
 import org.apache.hadoop.fs.{FileStatus, FileSystem, Path, PathFilter}
 import org.apache.parquet.hadoop.util.HadoopInputFile
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{SaveMode, SparkSession}
 import org.slf4j.{Logger, LoggerFactory}
 
 import java.nio.charset.Charset
@@ -12,7 +12,7 @@ object GuidewireSpark {
 
   val logger: Logger = LoggerFactory.getLogger(GuidewireSpark.getClass)
 
-  def reIndex(manifestLocation: String, databasePath: String): Unit = {
+  def reIndex(manifestLocation: String, databasePath: String, saveMode: SaveMode = SaveMode.Append): Unit = {
 
     require(SparkSession.getActiveSession.isDefined, "A spark session must be enabled")
     val spark = SparkSession.active

@@ -27,7 +27,9 @@ package object guidewire {
           "add" -> (
             ("path" -> path) ~
               ("size" -> size) ~
-              ("modificationTime" -> modificationTime)
+              ("partitionValues" -> Map.empty[String, String]) ~
+              ("modificationTime" -> modificationTime) ~
+              ("dataChange" -> true)
             )
         case "remove" =>
           "remove" -> (
@@ -98,6 +100,9 @@ package object guidewire {
           sb.append("\n")
         })
 
+      val totalBytes = files.map(_.size).sum
+      val totalFiles = files.length
+
       sb.append(compact(render("commitInfo" -> (
         ("timestamp" -> timestamp) ~
           ("operation" -> "WRITE") ~
@@ -106,7 +111,13 @@ package object guidewire {
               ("partitionBy" -> "[]")
             )) ~
           ("isolationLevel" -> "Serializable") ~
+          ("operationMetrics" -> (
+            ("numFiles" -> totalFiles) ~
+//            ("numOutputRows" -> 16) ~
+            ("numOutputBytes" -> totalBytes)
+          )) ~
           ("isBlindAppend" -> true) ~
+
           ("txnId" -> txnId)
         ))))
 
