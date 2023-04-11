@@ -40,7 +40,9 @@ package object guidewire {
           "remove" -> (
             ("path" -> path) ~
               ("size" -> size) ~
-              ("deletionTimestamp" -> modificationTime)
+              ("partitionValues" -> Map.empty[String, String]) ~
+              ("deletionTimestamp" -> modificationTime) ~
+              ("dataChange" -> true)
             )
         case _ => throw new IllegalArgumentException(s"unsupported file operation [$operation]")
       }

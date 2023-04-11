@@ -1,6 +1,5 @@
 package com.databricks.labs.guidewire
 
-import io.delta.tables.DeltaTable
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.sql.SparkSession
 import org.scalatest.BeforeAndAfterAll
@@ -24,9 +23,9 @@ class ReindexTest extends AnyFunSuite with Matchers with BeforeAndAfterAll {
   override def afterAll(): Unit = SparkSession.getActiveSession.foreach(_.close())
 
   test("Reindex all guidewire") {
-    val guidewire = new GuidewireSpark(region = Some("us-east-2"))
+    val guidewire = new GuidewireSpark()
     val manifest = guidewire.readManifest("s3://aamend/dev/guidewire/manifest.json")
-    val batches = guidewire.readBatches(manifest)
+    val batches = guidewire.processManifest(manifest)
     guidewire.saveDeltaLog(batches, "/Users/antoine.amend/Workspace/guidewire/guidewire-db/spark")
   }
 

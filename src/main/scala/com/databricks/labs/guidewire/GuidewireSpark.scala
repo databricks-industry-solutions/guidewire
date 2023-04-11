@@ -1,6 +1,5 @@
 package com.databricks.labs.guidewire
 
-import com.amazonaws.auth.AWSCredentials
 import com.amazonaws.services.s3.AmazonS3URI
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.sql.SparkSession
@@ -9,18 +8,18 @@ import org.slf4j.{Logger, LoggerFactory}
 import java.nio.charset.Charset
 import scala.annotation.tailrec
 
-class GuidewireSpark(region: Option[String] = None, credential: Option[AWSCredentials] = None) extends Serializable {
+class GuidewireSpark extends Serializable {
 
   val logger: Logger = LoggerFactory.getLogger(this.getClass)
 
   def readManifest(manifestLocation: String): Map[String, ManifestEntry] = {
     logger.info("Reading manifest file")
-    val s3 = new S3Access(region, credential)
+    val s3 = S3Access.build
     val manifestUri = new AmazonS3URI(manifestLocation)
     GuidewireUtils.readManifest(s3.readString(manifestUri.getBucket, manifestUri.getKey))
   }
 
-  def readBatches(manifest: Map[String, ManifestEntry]): Map[String, List[GwBatch]] = {
+  def processManifest(manifest: Map[String, ManifestEntry]): Map[String, List[GwBatch]] = {
 
     logger.info(s"Distributing ${manifest.size} table(s) against multiple executor(s)")
     val manifestRdd = SparkSession.active.sparkContext.makeRDD(manifest.toList).repartition(manifest.size)
@@ -30,7 +29,7 @@ class GuidewireSpark(region: Option[String] = None, credential: Option[AWSCreden
     manifestRdd.mapValues(manifestEntry => {
 
       // Ensure task serialization - this happens at executor level
-      val s3 = new S3Access(region, credential)
+      val s3 = S3Access.build
 
       // Process each schema directory
       val dataFilesUri = new AmazonS3URI(manifestEntry.getDataFilesPath)

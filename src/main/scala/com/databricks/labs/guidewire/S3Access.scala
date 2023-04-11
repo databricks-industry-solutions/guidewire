@@ -1,6 +1,5 @@
 package com.databricks.labs.guidewire
 
-import com.amazonaws.auth.{AWSCredentials, AWSStaticCredentialsProvider}
 import com.amazonaws.services.s3.model.ListObjectsRequest
 import com.amazonaws.services.s3.{AmazonS3, AmazonS3ClientBuilder}
 import org.apache.commons.io.IOUtils
@@ -8,21 +7,17 @@ import org.slf4j.LoggerFactory
 
 import scala.collection.JavaConverters._
 
-class S3Access(
-                val region: Option[String] = None,
-                val credentials: Option[AWSCredentials] = None,
-              ) extends Serializable {
+object S3Access {
+  def build = new S3Access
+}
+
+class S3Access() extends Serializable {
 
   lazy val s3Client: AmazonS3 = build()
   private val logger = LoggerFactory.getLogger(this.getClass)
 
   def build(): AmazonS3 = {
-    val s3Builder = AmazonS3ClientBuilder.standard()
-    if (region.isDefined) s3Builder.setRegion(region.get)
-    if (credentials.isDefined) {
-      s3Builder.setCredentials(new AWSStaticCredentialsProvider(credentials.get))
-    }
-    s3Builder.build()
+    AmazonS3ClientBuilder.standard().withForceGlobalBucketAccessEnabled(true).build()
   }
 
   def listTimestampDirectories(bucketName: String, bucketKey: String): Seq[Long] = {
