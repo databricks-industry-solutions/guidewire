@@ -16,9 +16,12 @@ class GuidewireUtilsTest extends AnyFunSuite with Matchers {
   }
 
   test("Generate file name") {
-    GuidewireUtils.generateFileName(2).length must be(20 + 5)
-    GuidewireUtils.generateFileName(212).length must be(20 + 5)
-    GuidewireUtils.generateFileName(212311).length must be(20 + 5)
+    GuidewireUtils.generateFileName(2).replace(".json", "").length must be(20)
+    GuidewireUtils.generateFileName(212).replace(".json", "").length must be(20)
+    GuidewireUtils.generateFileName(212311).replace(".json", "").length must be(20)
+    assertThrows[IllegalArgumentException] {
+      GuidewireUtils.generateFileName(-1)
+    }
   }
 
 }

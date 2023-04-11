@@ -49,9 +49,7 @@ package object guidewire {
       compact(render(json))
     }
 
-    def getKey: String = {
-      new AmazonS3URI(path).getKey
-    }
+    def getKey: String = new AmazonS3URI(path).getKey
 
   }
 
@@ -139,7 +137,6 @@ package object guidewire {
                 ("numOutputBytes" -> totalBytes)
               )) ~
             ("isBlindAppend" -> false) ~
-
             ("txnId" -> txnId)
           ))))
       } else {
@@ -156,7 +153,6 @@ package object guidewire {
                 ("numOutputBytes" -> totalBytes)
               )) ~
             ("isBlindAppend" -> true) ~
-
             ("txnId" -> txnId)
           ))))
       }

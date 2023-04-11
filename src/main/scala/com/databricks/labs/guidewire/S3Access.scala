@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory
 import scala.collection.JavaConverters._
 
 object S3Access {
+  // New instance everytime given that tasks are executed in parallel
   def build = new S3Access
 }
 
@@ -24,31 +25,31 @@ class S3Access() extends Serializable {
     logger.info(s"Listing directories in [$bucketKey]")
     val listObjectsRequest = new ListObjectsRequest(bucketName, bucketKey, null, "/", Int.MaxValue)
     val response = s3Client.listObjects(listObjectsRequest)
-    response.getCommonPrefixes.asScala.map(_.split("/").last.toLong)
+    val results = response.getCommonPrefixes.asScala.map(_.split("/").last.toLong)
+    logger.info(s"Found ${results.size} directory(ies) for schema [$bucketKey]")
+    results
   }
 
   def listParquetFiles(bucketName: String, bucketKey: String): Array[GwFile] = {
     logger.info(s"Listing parquet files in [$bucketKey]")
     val listObjectsRequest = new ListObjectsRequest(bucketName, bucketKey, null, "/", Int.MaxValue)
     val response = s3Client.listObjects(listObjectsRequest)
-    response.getObjectSummaries.asScala.filter(file => {
-      def accept(fileName: String): Boolean = {
-        !fileName.startsWith(".") && fileName.contains(".parquet")
-      }
-
-      accept(file.getKey.split("/").last)
+    val results = response.getObjectSummaries.asScala.filter(file => {
+      val fileName = file.getKey.split("/").last
+      !fileName.startsWith(".") && fileName.contains(".parquet")
     }).map(summary => {
-      GwFile(
-        s"s3://${summary.getBucketName}/${summary.getKey}",
-        summary.getSize,
-        summary.getLastModified.getTime
-      )
-    }).sortBy(_.modificationTime).toArray
+      val filePath = s"s3://${summary.getBucketName}/${summary.getKey}"
+      GwFile(filePath, summary.getSize, summary.getLastModified.getTime)
+    }).toArray
+    logger.info(s"Found ${results.length} parquet file(s) for schema [$bucketKey]")
+    results
   }
 
   def readString(bucketName: String, bucketKey: String): String = {
     logger.info(s"Reading text from [$bucketKey]")
-    s3Client.getObjectAsString(bucketName, bucketKey)
+    val results = s3Client.getObjectAsString(bucketName, bucketKey)
+    logger.info(s"Found ${results.length} table(s) to process")
+    results
   }
 
   def readByteArray(bucketName: String, bucketKey: String): Array[Byte] = {
