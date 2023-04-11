@@ -1,90 +1,110 @@
 package com.databricks.labs.guidewire
 
-import com.databricks.labs.guidewire.GuidewireUtils.readManifest
-import org.apache.hadoop.fs.{FileStatus, FileSystem, Path, PathFilter}
-import org.apache.parquet.hadoop.util.HadoopInputFile
-import org.apache.spark.sql.{SaveMode, SparkSession}
+import com.amazonaws.auth.AWSCredentials
+import com.amazonaws.services.s3.AmazonS3URI
+import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.spark.sql.SparkSession
 import org.slf4j.{Logger, LoggerFactory}
 
 import java.nio.charset.Charset
+import scala.annotation.tailrec
 
-object GuidewireSpark {
+class GuidewireSpark(region: Option[String] = None, credential: Option[AWSCredentials] = None) extends Serializable {
 
-  val logger: Logger = LoggerFactory.getLogger(GuidewireSpark.getClass)
+  val logger: Logger = LoggerFactory.getLogger(this.getClass)
 
-  def reIndex(manifestLocation: String, databasePath: String, saveMode: SaveMode = SaveMode.Append): Unit = {
-
-    require(SparkSession.getActiveSession.isDefined, "A spark session must be enabled")
-    val spark = SparkSession.active
-
+  def readManifest(manifestLocation: String): Map[String, ManifestEntry] = {
     logger.info("Reading manifest file")
-    val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)
-    val manifest = readManifest(fs.open(new Path(manifestLocation)))
+    val s3 = new S3Access(region, credential)
+    val manifestUri = new AmazonS3URI(manifestLocation)
+    GuidewireUtils.readManifest(s3.readString(manifestUri.getBucket, manifestUri.getKey))
+  }
 
-    val guidewirePathFilter = new PathFilter {
-      override def accept(path: Path): Boolean = {
-        !path.getName.startsWith(".") && path.getName.contains(".parquet")
-      }
-    }
+  def readBatches(manifest: Map[String, ManifestEntry]): Map[String, List[GwBatch]] = {
 
-    val processBatch = (timestampPath: FileStatus, timestampId: Long) => {
-      val committedTimestamp = timestampPath.getPath.getName.toLong
-      val committedFiles = fs.listStatus(timestampPath.getPath, guidewirePathFilter).map(guidewireFile => {
-        GwFile(
-          guidewireFile.getPath.toString,
-          guidewireFile.getLen,
-          guidewireFile.getModificationTime
-        )
-      })
-      val schema: Option[GwSchema] = if (timestampId == 0) {
-        Some(GwSchema(
-          GuidewireUtils.readSchema(HadoopInputFile.fromPath(new Path(committedFiles.head.path), fs.getConf)).json,
-          committedTimestamp
-        ))
-      } else None: Option[GwSchema]
-      GwBatch(committedTimestamp, committedFiles, schema = schema)
-    }
+    logger.info(s"Distributing ${manifest.size} table(s) against multiple executor(s)")
+    val manifestRdd = SparkSession.active.sparkContext.makeRDD(manifest.toList).repartition(manifest.size)
+    manifestRdd.cache()
 
-    val processTable = (tableManifest: ManifestEntry) => {
-      val tablePath = tableManifest.dataFilesPath
-      tableManifest.schemaHistory.toList.sortBy(_._2.toLong).zipWithIndex.flatMap({ case ((schema, lastUpdated), schemaId) =>
-        val schemaPath = new Path(tablePath, schema)
-        val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)
-        fs.listStatus(schemaPath).filter(timestampPath => {
-          timestampPath.getPath.getName.toLong <= lastUpdated.toLong
-        }).sortBy(_.getPath.getName.toLong).zipWithIndex.map({ case (timestampPath, timestampId) =>
-          (schemaId, timestampId, processBatch(timestampPath, timestampId))
+    // Distributed process, each executor will handle a given table
+    manifestRdd.mapValues(manifestEntry => {
+
+      // Ensure task serialization - this happens at executor level
+      val s3 = new S3Access(region, credential)
+
+      // Process each schema directory
+      val dataFilesUri = new AmazonS3URI(manifestEntry.getDataFilesPath)
+      val schemaHistory = manifestEntry.schemaHistory.toList.sortBy(_._2.toLong).zipWithIndex
+      val batches = schemaHistory.flatMap({ case ((schemaId, lastUpdatedTs), i) =>
+
+        // For each schema directory, find timestamp folders to process
+        val schemaDirectory = s"${dataFilesUri.getKey}/$schemaId/"
+        val schemaTimestamps = s3.listTimestampDirectories(dataFilesUri.getBucket, schemaDirectory).sorted
+        val schemaCommittedTimestamps = schemaTimestamps.filter(_ <= lastUpdatedTs.toLong)
+
+        // Get files for each timestamp folder
+        schemaCommittedTimestamps.zipWithIndex.map({ case (committedTimestamp, j) =>
+          val timestampDirectory = s"${dataFilesUri.getKey}/$schemaId/$committedTimestamp/"
+          val timestampFiles = s3.listParquetFiles(dataFilesUri.getBucket, timestampDirectory)
+
+          // For the first committed timestamp folder, extract schema from parquet file
+          val gwSchema = if (j == 0) {
+            val sampleFile = timestampFiles.minBy(_.size)
+            val sampleSchema = GuidewireUtils.readSchema(s3.readByteArray(dataFilesUri.getBucket, sampleFile.getKey))
+            Some(GwSchema(sampleSchema, committedTimestamp))
+          } else None: Option[GwSchema]
+          val gwBatch = GwBatch(committedTimestamp, filesToAdd = timestampFiles, schema = gwSchema)
+          (gwBatch, (i, j))
         })
-      }).sortBy({ case (schemaId, timestampId, _) =>
-        (schemaId, timestampId)
-      }).zipWithIndex.map({ case ((_, _, batch), commitId) =>
-        batch.copy(version = commitId)
+      }).sortBy({ case (_, (schemaId, batchId)) =>
+        // Sort all batches (schema first, then timestamp)
+        (schemaId, batchId)
+      }).map(_._1).zipWithIndex.map({ case (batch, batchId) =>
+        // And get Batch version Id used for delta log
+        batch.copy(version = batchId)
       })
-    }
 
-    manifest.par.map({ case (tableName, tableManifest) =>
-      (tableName, processTable(tableManifest))
-    }).foreach({ case (tableName, deltaFiles) =>
+      // Every time schema changes, we overwrite data (we assume old data is ported out)
+      accumulateFiles(batches)
+
+    }).collect().toMap
+
+  }
+
+  def saveDeltaLog(batches: Map[String, List[GwBatch]], databasePath: String): Unit = {
+    // Serialize all batches as delta logs
+    batches.foreach({ case (tableName, batches) =>
+      // Delta log will be stored on a given path accessible by Spark on Databricks
+      val fs = FileSystem.get(SparkSession.active.sparkContext.hadoopConfiguration)
       val tablePath = new Path(databasePath, tableName)
       val deltaPath = new Path(tablePath, "_delta_log")
       if (fs.exists(deltaPath)) fs.delete(deltaPath, true)
       fs.mkdirs(deltaPath)
-      deltaFiles.foreach(gwBatch => {
-        val deltaFile = new Path(deltaPath, GuidewireUtils.generateFileName(gwBatch.version))
+      batches.foreach(batch => {
+        val deltaFile = new Path(deltaPath, GuidewireUtils.generateFileName(batch.version))
         val fos = fs.create(deltaFile)
-        fos.write(gwBatch.toJson.getBytes(Charset.defaultCharset()))
+        fos.write(batch.toJson.getBytes(Charset.defaultCharset()))
         fos.close()
       })
     })
-
-
-
-
-
-
-
   }
 
+  @tailrec
+  private def accumulateFiles(
+                               batches: List[GwBatch],
+                               filesToRemove: Array[GwFile] = Array.empty[GwFile],
+                               processed: List[GwBatch] = List.empty[GwBatch]
+                             ): List[GwBatch] = {
 
+    if (batches.isEmpty) return processed
+    val newBatch = batches.head
+    if (newBatch.schema.isDefined) {
+      // change of schema, add previous files to remove
+      accumulateFiles(batches.tail, newBatch.filesToAdd, processed :+ newBatch.copy(filesToRemove = filesToRemove))
+    } else {
+      // schema did not change, keep accumulating files
+      accumulateFiles(batches.tail, filesToRemove ++ newBatch.filesToAdd, processed :+ newBatch)
+    }
+  }
 
 }

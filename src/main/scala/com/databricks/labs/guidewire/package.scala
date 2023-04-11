@@ -1,5 +1,6 @@
 package com.databricks.labs
 
+import com.amazonaws.services.s3.AmazonS3URI
 import org.json4s.JsonDSL._
 import org.json4s.jackson.JsonMethods._
 
@@ -12,7 +13,11 @@ package object guidewire {
                             totalProcessedRecordsCount: Int,
                             dataFilesPath: String,
                             schemaHistory: Map[String, String]
-                          )
+                          ) {
+    def getDataFilesPath: String = {
+      if (dataFilesPath.endsWith("/")) dataFilesPath.dropRight(1) else dataFilesPath
+    }
+  }
 
   case class GwFile(
                      path: String,
@@ -34,11 +39,16 @@ package object guidewire {
         case "remove" =>
           "remove" -> (
             ("path" -> path) ~
+              ("size" -> size) ~
               ("deletionTimestamp" -> modificationTime)
             )
         case _ => throw new IllegalArgumentException(s"unsupported file operation [$operation]")
       }
       compact(render(json))
+    }
+
+    def getKey: String = {
+      new AmazonS3URI(path).getKey
     }
 
   }
@@ -68,7 +78,8 @@ package object guidewire {
 
   case class GwBatch(
                       timestamp: Long,
-                      files: Array[GwFile],
+                      filesToAdd: Array[GwFile],
+                      filesToRemove: Array[GwFile] = Array.empty[GwFile],
                       txnId: String = UUID.randomUUID().toString,
                       schema: Option[GwSchema] = None,
                       version: Int = 0,
@@ -91,7 +102,7 @@ package object guidewire {
         sb.append("\n")
       }
 
-      files
+      filesToAdd
         .map(_.copy(operation = "add"))
         .sortBy(_.modificationTime)
         .map(_.toJson)
@@ -100,26 +111,53 @@ package object guidewire {
           sb.append("\n")
         })
 
-      val totalBytes = files.map(_.size).sum
-      val totalFiles = files.length
+      filesToRemove
+        .map(_.copy(operation = "remove"))
+        .sortBy(_.modificationTime)
+        .map(_.toJson)
+        .foreach(j => {
+          sb.append(j)
+          sb.append("\n")
+        })
 
-      sb.append(compact(render("commitInfo" -> (
-        ("timestamp" -> timestamp) ~
-          ("operation" -> "WRITE") ~
-          ("operationParameters" -> (
-            ("mode" -> "Append") ~
-              ("partitionBy" -> "[]")
-            )) ~
-          ("isolationLevel" -> "Serializable") ~
-          ("operationMetrics" -> (
-            ("numFiles" -> totalFiles) ~
-//            ("numOutputRows" -> 16) ~
-            ("numOutputBytes" -> totalBytes)
-          )) ~
-          ("isBlindAppend" -> true) ~
+      val totalBytes = filesToAdd.map(_.size).sum
+      val totalFiles = filesToAdd.length
 
-          ("txnId" -> txnId)
-        ))))
+      if (schema.isDefined) {
+        sb.append(compact(render("commitInfo" -> (
+          ("timestamp" -> timestamp) ~
+            ("operation" -> "WRITE") ~
+            ("operationParameters" -> (
+              ("mode" -> "Overwrite") ~
+                ("partitionBy" -> "[]")
+              )) ~
+            ("isolationLevel" -> "Serializable") ~
+            ("operationMetrics" -> (
+              ("numFiles" -> totalFiles) ~
+                ("numOutputBytes" -> totalBytes)
+              )) ~
+            ("isBlindAppend" -> false) ~
+
+            ("txnId" -> txnId)
+          ))))
+      } else {
+        sb.append(compact(render("commitInfo" -> (
+          ("timestamp" -> timestamp) ~
+            ("operation" -> "WRITE") ~
+            ("operationParameters" -> (
+              ("mode" -> "Append") ~
+                ("partitionBy" -> "[]")
+              )) ~
+            ("isolationLevel" -> "Serializable") ~
+            ("operationMetrics" -> (
+              ("numFiles" -> totalFiles) ~
+                ("numOutputBytes" -> totalBytes)
+              )) ~
+            ("isBlindAppend" -> true) ~
+
+            ("txnId" -> txnId)
+          ))))
+      }
 
       sb.toString()
 

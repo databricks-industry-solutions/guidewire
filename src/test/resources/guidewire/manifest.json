@@ -2,7 +2,7 @@
   "databricks": {
     "lastSuccessfulWriteTimestamp": "1562112543752",
     "totalProcessedRecordsCount": 71027,
-    "dataFilesPath": "src/test/resources/guidewire/databricks",
+    "dataFilesPath": "s3://aamend/dev/guidewire/databricks",
     "schemaHistory": {
       "301248659": "1562112543750",
       "301248660": "1562112543752"
