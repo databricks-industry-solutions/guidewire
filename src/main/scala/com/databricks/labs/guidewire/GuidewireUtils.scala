@@ -25,7 +25,7 @@ object GuidewireUtils {
   }
 
   @tailrec
-  def accumulateAddFiles(
+  def unregisterFilesPropagation(
                           batches: List[GwBatch],
                           filesToRemove: Array[GwFile] = Array.empty[GwFile],
                           processed: List[GwBatch] = List.empty[GwBatch]
@@ -35,10 +35,10 @@ object GuidewireUtils {
     val newBatch = batches.head
     if (newBatch.schema.isDefined) {
       // change of schema, add previous files to remove
-      accumulateAddFiles(batches.tail, newBatch.filesToAdd, processed :+ newBatch.copy(filesToRemove = filesToRemove))
+      unregisterFilesPropagation(batches.tail, newBatch.filesToAdd, processed :+ newBatch.copy(filesToRemove = filesToRemove))
     } else {
       // schema did not change, keep accumulating files
-      accumulateAddFiles(batches.tail, filesToRemove ++ newBatch.filesToAdd, processed :+ newBatch)
+      unregisterFilesPropagation(batches.tail, filesToRemove ++ newBatch.filesToAdd, processed :+ newBatch)
     }
   }
 
@@ -56,19 +56,20 @@ object GuidewireUtils {
     val fs = FileSystem.get(SparkSession.active.sparkContext.hadoopConfiguration)
     val logContent = IOUtils.toString(fs.open(deltaLog), StandardCharsets.UTF_8)
     val isOverwrite = logContent.contains("\"mode\":\"Overwrite\"")
-    val version = GuidewireUtils.getVersionFromDeltaFileName(deltaLog)
+    val version = GuidewireUtils.getVersionFromDeltaFileName(deltaLog.getName)
     val allFiles = GuidewireUtils.readAddFilesFromDeltaLog(logContent)
     val creationTime = fs.getFileStatus(deltaLog).getModificationTime
     GwBatch(
       creationTime,
       allFiles,
+      // We do not really care of committed schema, we just want to read back files to add or remove
       schema = if (isOverwrite) Some(GwSchema("{}", creationTime)) else None: Option[GwSchema],
       version = version
     )
   }
 
-  def getVersionFromDeltaFileName(deltaLogPath: Path): Int = {
-    deltaLogPath.getName.replaceAll(".json", "").toInt
+  def getVersionFromDeltaFileName(deltaLogPath: String): Int = {
+    deltaLogPath.split("\\.").head.toInt
   }
 
   def readAddFilesFromDeltaLog(deltaLogJson: String): Array[GwFile] = {

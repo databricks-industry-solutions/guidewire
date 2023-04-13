@@ -1,0 +1,4 @@
+{"protocol":{"minReaderVersion":1,"minWriterVersion":2}}
+{"metaData":{"id":"schema","format":{"provider":"parquet","options":{}},"schemaString":"{\"type\":\"struct\",\"fields\":[{\"name\":\"firstName\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}},{\"name\":\"age\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}","configuration":{},"partitionColumns":[],"createdTime":1562112543749}}
+{"add":{"path":"s3://aamend/dev/guidewire/databricks/301248659/1562112543749/part-00000-252b58d7-c77a-4c2e-8546-6bfe08e83721-c000.snappy.parquet","size":752,"partitionValues":{},"modificationTime":1681145819000,"dataChange":true}}
+{"commitInfo":{"timestamp":1562112543749,"operation":"WRITE","operationParameters":{"mode":"Overwrite","partitionBy":"[]"},"isolationLevel":"Serializable","operationMetrics":{"numFiles":1,"numOutputBytes":752},"isBlindAppend":false,"txnId":"d0f4337f-c63c-40e1-94d9-ccb94a1ede9b"}}

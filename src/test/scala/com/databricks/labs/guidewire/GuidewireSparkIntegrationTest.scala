@@ -1,6 +1,7 @@
 package com.databricks.labs.guidewire
 
 import org.apache.commons.io.IOUtils
+import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.sql.SparkSession
 import org.scalatest.BeforeAndAfterAll
@@ -52,6 +53,23 @@ class GuidewireSparkIntegrationTest extends AnyFunSuite with Matchers with Befor
     loadedCheckpoints must be(empty)
   }
 
+  test("Read delta log") {
+    val deltaLogUrl = this.getClass.getResource("delta/00000000000000000002.json")
+    val deltaLogDir = deltaLogUrl.toString
+    val extractedBatch = GuidewireUtils.getBatchFromDeltaLog(new Path(deltaLogDir))
+    extractedBatch.version must be(2)
+    extractedBatch.timestamp must be(1562112543751L)
+    extractedBatch.schema must not be empty
+    extractedBatch.filesToRemove.length must be(4)
+    extractedBatch.filesToAdd.length must be(1)
+  }
+
+  test("Read delta log without schema") {
+    val deltaLogUrl = this.getClass.getResource("delta/00000000000000000001.json")
+    val deltaLogDir = deltaLogUrl.toString
+    val extractedBatch = GuidewireUtils.getBatchFromDeltaLog(new Path(deltaLogDir))
+    extractedBatch.schema must be(empty)
+  }
 
 
 

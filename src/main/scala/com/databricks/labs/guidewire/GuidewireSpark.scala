@@ -150,7 +150,7 @@ object GuidewireSpark extends Serializable {
       val previousBatches = deltaFiles.map(deltaFile => GuidewireUtils.getBatchFromDeltaLog(deltaFile.getPath)).toList
       val lastVersion = previousBatches.map(_.version).max
       val updatedBatches = previousBatches ++ batches.map(b => b.copy(version = b.version + lastVersion + 1))
-      val accumulatedBatches = GuidewireUtils.accumulateAddFiles(updatedBatches)
+      val accumulatedBatches = GuidewireUtils.unregisterFilesPropagation(updatedBatches)
       accumulatedBatches.filter(_.version > lastVersion).foreach(batch => {
         val deltaFile = new Path(deltaPath, GuidewireUtils.generateFileName(batch.version))
         val fos = fs.create(deltaFile)
@@ -167,7 +167,7 @@ object GuidewireSpark extends Serializable {
     if (fs.exists(deltaPath)) fs.delete(deltaPath, true)
     fs.mkdirs(deltaPath)
     // Every time schema changes, we need to ensure previous files are de-registered from delta log
-    val accumulatedBatches = GuidewireUtils.accumulateAddFiles(batches)
+    val accumulatedBatches = GuidewireUtils.unregisterFilesPropagation(batches)
     accumulatedBatches.foreach(batch => {
       val deltaFile = new Path(deltaPath, GuidewireUtils.generateFileName(batch.version))
       val fos = fs.create(deltaFile)

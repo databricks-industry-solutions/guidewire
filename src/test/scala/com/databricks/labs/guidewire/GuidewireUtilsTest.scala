@@ -31,7 +31,7 @@ class GuidewireUtilsTest extends AnyFunSuite with Matchers {
       GwBatch(6L, version = 6, filesToAdd = Array(GwFile("foo6", 6, 6), GwFile("bar6", 6, 6)), schema = newSchema),
     )
 
-    GuidewireUtils.accumulateAddFiles(batches).foreach(gw => {
+    GuidewireUtils.unregisterFilesPropagation(batches).foreach(gw => {
       val fr = gw.filesToRemove.map(_.path).toSet
       gw.version match {
         case 1 => fr must be(empty)
@@ -43,11 +43,10 @@ class GuidewireUtilsTest extends AnyFunSuite with Matchers {
       }
     })
 
-    GuidewireUtils.accumulateAddFiles(List.empty[GwBatch]) must be(empty)
-    val emptyAccumulation = GuidewireUtils.accumulateAddFiles(batches.map(_.copy(schema = None)))
+    GuidewireUtils.unregisterFilesPropagation(List.empty[GwBatch]) must be(empty)
+    val emptyAccumulation = GuidewireUtils.unregisterFilesPropagation(batches.map(_.copy(schema = None)))
     emptyAccumulation.filter(_.filesToRemove.length > 0) must be(empty)
   }
-
 
   test("Deserializing manifest") {
     val manifestStream: InputStream = this.getClass.getResourceAsStream("/manifest.json")
@@ -55,6 +54,36 @@ class GuidewireUtilsTest extends AnyFunSuite with Matchers {
     val map = GuidewireUtils.readManifest(manifestStream)
     map.keys must contain("databricks")
     map("databricks").dataFilesPath must be("databricks")
+  }
+
+  test("get version from file name") {
+    GuidewireUtils.getVersionFromDeltaFileName("000000000001.json") must be(1)
+    assertThrows[IllegalArgumentException] {
+      GuidewireUtils.getVersionFromDeltaFileName("Foo bar")
+    }
+  }
+
+  test("Reading files from delta logs") {
+    val json =
+      """foo bar
+        |{"hello":"world"}
+        |{"add":{"path":"s3://aamend/dev/guidewire/databricks/301248659/1562112543750/part-00001-189ac949-a8d1-4cf0-a6bb-8e2c5f456ba8-c000.snappy.parquet","size":717,"partitionValues":{},"modificationTime":1681145820000,"dataChange":true}}
+        |{"add":{"path":"s3://aamend/dev/guidewire/databricks/301248659/1562112543750/part-00002-b745924d-a611-4615-bb58-5e17018f1a82-c000.snappy.parquet","size":726,"partitionValues":{},"modificationTime":1681145820000,"dataChange":true}}
+        |{"commitInfo":{"timestamp":1562112543750,"operation":"WRITE","operationParameters":{"mode":"Append","partitionBy":"[]"},"isolationLevel":"Serializable","operationMetrics":{"numFiles":3,"numOutputBytes":2141},"isBlindAppend":true,"txnId":"cd041ffe-fc8f-403e-a89f-9cbba433b3cc"}}
+        |""".stripMargin
+
+    val xs = GuidewireUtils.readAddFilesFromDeltaLog(json)
+    xs.length must be(2)
+    xs.map(_.path.endsWith(".parquet")).length must be(2)
+
+  }
+
+  test("Reading parquet file") {
+    val parquetStream: InputStream = this.getClass.getResourceAsStream("/example.snappy.parquet")
+    val parquetBytes = parquetStream.readAllBytes()
+    val schemaJson = GuidewireUtils.readSchema(parquetBytes)
+    val expected = "{\"type\":\"struct\",\"fields\":[{\"name\":\"firstName\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}},{\"name\":\"lastName\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}},{\"name\":\"age\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}"
+    schemaJson must be(expected)
   }
 
 }
