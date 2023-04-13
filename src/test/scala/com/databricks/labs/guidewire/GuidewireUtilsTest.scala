@@ -67,8 +67,8 @@ class GuidewireUtilsTest extends AnyFunSuite with Matchers {
     val json =
       """foo bar
         |{"hello":"world"}
-        |{"add":{"path":"s3://aamend/dev/guidewire/databricks/301248659/1562112543750/part-00001-189ac949-a8d1-4cf0-a6bb-8e2c5f456ba8-c000.snappy.parquet","size":717,"partitionValues":{},"modificationTime":1681145820000,"dataChange":true}}
-        |{"add":{"path":"s3://aamend/dev/guidewire/databricks/301248659/1562112543750/part-00002-b745924d-a611-4615-bb58-5e17018f1a82-c000.snappy.parquet","size":726,"partitionValues":{},"modificationTime":1681145820000,"dataChange":true}}
+        |{"add":{"path":"part-00001-189ac949-a8d1-4cf0-a6bb-8e2c5f456ba8-c000.snappy.parquet","size":717,"partitionValues":{},"modificationTime":1681145820000,"dataChange":true}}
+        |{"add":{"path":"part-00002-b745924d-a611-4615-bb58-5e17018f1a82-c000.snappy.parquet","size":726,"partitionValues":{},"modificationTime":1681145820000,"dataChange":true}}
         |{"commitInfo":{"timestamp":1562112543750,"operation":"WRITE","operationParameters":{"mode":"Append","partitionBy":"[]"},"isolationLevel":"Serializable","operationMetrics":{"numFiles":3,"numOutputBytes":2141},"isBlindAppend":true,"txnId":"cd041ffe-fc8f-403e-a89f-9cbba433b3cc"}}
         |""".stripMargin
 
