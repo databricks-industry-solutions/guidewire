@@ -2,12 +2,12 @@ package com.databricks.labs.guidewire
 
 import com.amazonaws.services.s3.AmazonS3URI
 import org.apache.hadoop.fs.{FileSystem, Path}
-import org.apache.spark.sql.{SaveMode, SparkSession}
+import org.apache.spark.sql.{SaveMode, SparkSession, functions}
 import org.slf4j.{Logger, LoggerFactory}
 
 import java.nio.charset.Charset
 
-object GuidewireSpark extends Serializable {
+object GuidewireSparkUtils extends Serializable {
 
   val logger: Logger = LoggerFactory.getLogger(this.getClass)
   val checkpointsTable = "_checkpoints"
@@ -16,13 +16,14 @@ object GuidewireSpark extends Serializable {
     logger.info("Reading manifest file")
     val s3 = S3Access.build
     val manifestUri = new AmazonS3URI(manifestLocation)
-    GuidewireUtils.readManifest(s3.readString(manifestUri.getBucket, manifestUri.getKey))
+    val manifest = GuidewireUtils.readManifest(s3.readString(manifestUri.getBucket, manifestUri.getKey))
+    logger.info(s"Found ${manifest.size} table(s) to process")
+    manifest
   }
 
   def processManifest(
                        manifest: Map[String, ManifestEntry],
-                       checkpoints: Map[String, Long] = Map.empty[String, Long],
-                       saveMode: SaveMode = SaveMode.Append
+                       checkpoints: Map[String, Long] = Map.empty[String, Long]
                      ): Map[String, List[GwBatch]] = {
 
     logger.info(s"Distributing ${manifest.size} table(s) against multiple executor(s)")
@@ -31,15 +32,12 @@ object GuidewireSpark extends Serializable {
     manifestRdd.cache()
     manifestRdd.count()
 
-    val checkpointsB = saveMode match {
-      case SaveMode.Append =>
-        logger.info("Processing guidewire as data increment")
-        SparkSession.active.sparkContext.broadcast(checkpoints)
-      case SaveMode.Overwrite =>
-        logger.info("Reindexing all guidewire database")
-        SparkSession.active.sparkContext.broadcast(Map.empty[String, Long])
-      case _ =>
-        throw new IllegalArgumentException("Only [Append] or [Overwrite] are supported")
+    val checkpointsB = if (checkpoints.nonEmpty) {
+      logger.info("Processing guidewire as data increment")
+      SparkSession.active.sparkContext.broadcast(checkpoints)
+    } else {
+      logger.info("Reindexing all guidewire database")
+      SparkSession.active.sparkContext.broadcast(Map.empty[String, Long])
     }
 
     // Distributed process, each executor will handle a given table
@@ -96,7 +94,6 @@ object GuidewireSpark extends Serializable {
     // We distributed this process as guidewire manifest may contain lots of table
     // But the resulting process is a collection that fits well in memory
     batchRdd.collect().toMap
-
   }
 
   def saveCheckpoints(
@@ -106,10 +103,10 @@ object GuidewireSpark extends Serializable {
     logger.info("Saving checkpoints to delta")
     val spark = SparkSession.active
     import spark.implicits._
-    val batchesDf = batches.map({ case (tableName, tableBatches) =>
-      (tableName, tableBatches.maxBy(_.timestamp).timestamp)
-    }).toList.toDF("tableName", "lastProcessed")
-    batchesDf.write.format("delta").mode(SaveMode.Overwrite).save(s"$databasePath/$checkpointsTable")
+    val checkpoints = batches.filter(_._2.nonEmpty).map({ case (tableName, tableBatches) =>
+      (tableName, tableBatches.maxBy(_.timestamp).timestamp, System.currentTimeMillis())
+    }).toList.toDF("tableName", "lastProcessed", "executionTimestamp")
+    checkpoints.write.format("json").mode(SaveMode.Append).save(s"$databasePath/$checkpointsTable")
   }
 
   def loadCheckpoints(
@@ -118,8 +115,8 @@ object GuidewireSpark extends Serializable {
     val fs = FileSystem.get(SparkSession.active.sparkContext.hadoopConfiguration)
     if (fs.exists(new Path(s"$databasePath/$checkpointsTable"))) {
       logger.info("Loading checkpoints from delta")
-      val batchesDF = SparkSession.active.read.format("delta").load(s"$databasePath/$checkpointsTable")
-      batchesDF.rdd.map(r => {
+      val batchesDF = SparkSession.active.read.format("json").load(s"$databasePath/$checkpointsTable")
+      batchesDF.groupBy("tableName").agg(functions.max("lastProcessed").alias("lastProcessed")).rdd.map(r => {
         (r.getAs[String]("tableName"), r.getAs[Long]("lastProcessed"))
       }).collect().toMap
     } else {
@@ -150,7 +147,7 @@ object GuidewireSpark extends Serializable {
       val previousBatches = deltaFiles.map(deltaFile => GuidewireUtils.getBatchFromDeltaLog(deltaFile.getPath)).toList
       val lastVersion = previousBatches.map(_.version).max
       val updatedBatches = previousBatches ++ batches.map(b => b.copy(version = b.version + lastVersion + 1))
-      val accumulatedBatches = GuidewireUtils.unregisterFilesPropagation(updatedBatches)
+      val accumulatedBatches = GuidewireUtils.unregisterFilesPropagation(updatedBatches.sortBy(_.version))
       accumulatedBatches.filter(_.version > lastVersion).foreach(batch => {
         val deltaFile = new Path(deltaPath, GuidewireUtils.generateFileName(batch.version))
         val fos = fs.create(deltaFile)

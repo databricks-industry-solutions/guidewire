@@ -11,7 +11,7 @@ import org.scalatest.matchers.must.Matchers
 import java.io.{File, FileFilter}
 import java.nio.file.Files
 
-class GuidewireSparkIntegrationTest extends AnyFunSuite with Matchers with BeforeAndAfterAll {
+class GuidewireSparkUtilsTest extends AnyFunSuite with Matchers with BeforeAndAfterAll {
 
   Logger.getLogger("org.apache").setLevel(Level.OFF)
   Logger.getLogger("akka").setLevel(Level.OFF)
@@ -20,8 +20,6 @@ class GuidewireSparkIntegrationTest extends AnyFunSuite with Matchers with Befor
     SparkSession.builder()
       .master("local[*]")
       .appName("Guidewire")
-      .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-      .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
       .getOrCreate()
   }
 
@@ -41,14 +39,14 @@ class GuidewireSparkIntegrationTest extends AnyFunSuite with Matchers with Befor
         GwBatch(3L, Array.empty[GwFile]),
       )
     )
-    GuidewireSpark.saveCheckpoints(batches, tempDir.toString)
-    val loadedCheckpoints = GuidewireSpark.loadCheckpoints(tempDir.toString)
+    GuidewireSparkUtils.saveCheckpoints(batches, tempDir.toString)
+    val loadedCheckpoints = GuidewireSparkUtils.loadCheckpoints(tempDir.toString)
     loadedCheckpoints must be(Map("foo" -> 2, "bar" -> 3))
   }
 
   test("Reading empty checkpoints") {
     val tempDir = Files.createTempDirectory("guidewire_empty")
-    val loadedCheckpoints = GuidewireSpark.loadCheckpoints(tempDir.toString)
+    val loadedCheckpoints = GuidewireSparkUtils.loadCheckpoints(tempDir.toString)
     loadedCheckpoints must be(empty)
   }
 
@@ -85,7 +83,7 @@ class GuidewireSparkIntegrationTest extends AnyFunSuite with Matchers with Befor
         GwBatch(2L, Array.empty[GwFile], version = 2),
       )
     )
-    GuidewireSpark.saveDeltaLog(batchesInit, tempDir.toString)
+    GuidewireSparkUtils.saveDeltaLog(batchesInit, tempDir.toString)
     val filesInit = new File(tempDir.toFile, deltaFileName).listFiles(pathFilter)
     filesInit.length must be(3)
 
@@ -95,7 +93,7 @@ class GuidewireSparkIntegrationTest extends AnyFunSuite with Matchers with Befor
         GwBatch(1L, Array.empty[GwFile], version = 1),
       )
     )
-    GuidewireSpark.saveDeltaLog(batchesOverwrite, tempDir.toString, SaveMode.Overwrite)
+    GuidewireSparkUtils.saveDeltaLog(batchesOverwrite, tempDir.toString, SaveMode.Overwrite)
     val filesOverwrite = new File(tempDir.toFile, deltaFileName).listFiles(pathFilter)
     filesOverwrite.length must be(2)
 
@@ -106,7 +104,7 @@ class GuidewireSparkIntegrationTest extends AnyFunSuite with Matchers with Befor
         GwBatch(2L, Array.empty[GwFile], version = 2),
       )
     )
-    GuidewireSpark.saveDeltaLog(batchesAppend, tempDir.toString, SaveMode.Append)
+    GuidewireSparkUtils.saveDeltaLog(batchesAppend, tempDir.toString, SaveMode.Append)
     val filesAppend = new File(tempDir.toFile, deltaFileName).listFiles(pathFilter)
     filesAppend.foreach(println)
     filesAppend.length must be(5)
@@ -124,7 +122,7 @@ class GuidewireSparkIntegrationTest extends AnyFunSuite with Matchers with Befor
       )
     )
     val tempDir = Files.createTempDirectory("delta_log_spark")
-    GuidewireSpark.saveDeltaLog(batchesAppend, tempDir.toString, SaveMode.Overwrite)
+    GuidewireSparkUtils.saveDeltaLog(batchesAppend, tempDir.toString, SaveMode.Overwrite)
 
     SparkSession.active
       .read
@@ -147,6 +145,14 @@ class GuidewireSparkIntegrationTest extends AnyFunSuite with Matchers with Befor
       .load(new File(tempDir.toFile, "foo").toString)
       .schema must be(schema2)
 
+  }
+
+  test("Reindex all guidewire") {
+    val manifest = GuidewireSparkUtils.readManifest("s3://aamend/dev/guidewire/manifest.json")
+    val checkpoints = GuidewireSparkUtils.loadCheckpoints("spark")
+    val batches = GuidewireSparkUtils.processManifest(manifest, checkpoints)
+    GuidewireSparkUtils.saveCheckpoints(batches, "spark")
+    GuidewireSparkUtils.saveDeltaLog(batches, "/Users/antoine.amend/Workspace/guidewire/guidewire-db/spark", saveMode = SaveMode.Append)
   }
 
 

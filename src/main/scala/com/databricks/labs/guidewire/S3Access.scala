@@ -47,9 +47,7 @@ class S3Access() extends Serializable {
 
   def readString(bucketName: String, bucketKey: String): String = {
     logger.info(s"Reading text from [$bucketKey]")
-    val results = s3Client.getObjectAsString(bucketName, bucketKey)
-    logger.info(s"Found ${results.length} table(s) to process")
-    results
+    s3Client.getObjectAsString(bucketName, bucketKey)
   }
 
   def readByteArray(bucketName: String, bucketKey: String): Array[Byte] = {
