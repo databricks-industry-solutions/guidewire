@@ -26,10 +26,10 @@ object GuidewireUtils {
 
   @tailrec
   def unregisterFilesPropagation(
-                          batches: List[GwBatch],
-                          filesToRemove: Array[GwFile] = Array.empty[GwFile],
-                          processed: List[GwBatch] = List.empty[GwBatch]
-                        ): List[GwBatch] = {
+                                  batches: List[GwBatch],
+                                  filesToRemove: Array[GwFile] = Array.empty[GwFile],
+                                  processed: List[GwBatch] = List.empty[GwBatch]
+                                ): List[GwBatch] = {
 
     if (batches.isEmpty) return processed
     val newBatch = batches.head

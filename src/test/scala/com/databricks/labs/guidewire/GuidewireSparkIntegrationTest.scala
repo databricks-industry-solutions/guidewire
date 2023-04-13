@@ -1,7 +1,6 @@
 package com.databricks.labs.guidewire
 
-import org.apache.commons.io.IOUtils
-import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.hadoop.fs.Path
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}
 import org.apache.spark.sql.{SaveMode, SparkSession}
@@ -9,8 +8,7 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.must.Matchers
 
-import java.io.{File, FileFilter, FileInputStream}
-import java.nio.charset.StandardCharsets
+import java.io.{File, FileFilter}
 import java.nio.file.Files
 
 class GuidewireSparkIntegrationTest extends AnyFunSuite with Matchers with BeforeAndAfterAll {
@@ -150,16 +148,6 @@ class GuidewireSparkIntegrationTest extends AnyFunSuite with Matchers with Befor
       .schema must be(schema2)
 
   }
-
-
-
-
-
-
-
-
-
-
 
 
 }
