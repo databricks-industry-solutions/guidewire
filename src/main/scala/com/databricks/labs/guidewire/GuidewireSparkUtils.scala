@@ -11,6 +11,7 @@ object GuidewireSparkUtils extends Serializable {
 
   val logger: Logger = LoggerFactory.getLogger(this.getClass)
   val checkpointsTable = "_checkpoints"
+  val deltaManifest = "_delta_log"
 
   def readManifest(manifestLocation: String): Map[String, ManifestEntry] = {
     logger.info("Reading manifest file")
@@ -139,7 +140,7 @@ object GuidewireSparkUtils extends Serializable {
   private def saveDeltaLogAppend(tableName: String, batches: List[GwBatch], databasePath: String): Unit = {
     val fs = FileSystem.get(SparkSession.active.sparkContext.hadoopConfiguration)
     val tablePath = new Path(databasePath, tableName)
-    val deltaPath = new Path(tablePath, "_delta_log")
+    val deltaPath = new Path(tablePath, deltaManifest)
     if (!fs.exists(deltaPath)) {
       saveDeltaLogOverwrite(tableName, batches, databasePath)
     } else {
@@ -160,7 +161,7 @@ object GuidewireSparkUtils extends Serializable {
   private def saveDeltaLogOverwrite(tableName: String, batches: List[GwBatch], databasePath: String): Unit = {
     val fs = FileSystem.get(SparkSession.active.sparkContext.hadoopConfiguration)
     val tablePath = new Path(databasePath, tableName)
-    val deltaPath = new Path(tablePath, "_delta_log")
+    val deltaPath = new Path(tablePath, deltaManifest)
     if (fs.exists(deltaPath)) fs.delete(deltaPath, true)
     fs.mkdirs(deltaPath)
     // Every time schema changes, we need to ensure previous files are de-registered from delta log
