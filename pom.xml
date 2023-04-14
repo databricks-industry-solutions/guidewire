@@ -11,6 +11,32 @@
     <name>guidewire</name>
     <description>Interpreting guidewire CDA as delta table</description>
 
+    <inceptionYear>2023</inceptionYear>
+
+    <organization>
+        <name>Databricks</name>
+        <url>www.databricks.com</url>
+    </organization>
+
+    <licenses>
+        <license>
+            <name>db-license</name>
+            <url>https://www.databricks.com/legal/db-license</url>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>aamend</id>
+            <name>Antoine Amend</name>
+            <email>antoine.amend@databricks.com</email>
+            <timezone>America/Phoenix</timezone>
+            <roles>
+                <role>Technical Director - Financial Services</role>
+            </roles>
+        </developer>
+    </developers>
+
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <scala.version>2.12.15</scala.version>

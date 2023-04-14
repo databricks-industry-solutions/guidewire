@@ -13,9 +13,6 @@ occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim 
 <img src="images/approach.png" width=1000>
 
 ___
-<antoine.amend@databricks.com>
-
-___
 
 ## Approach
 
@@ -26,27 +23,27 @@ ___
 ```scala
 import com.databricks.labs.guidewire.Guidewire
 val manifestUri = "s3://bucket/key/manifest.json"
-val databasePath = "/path/to/delta/table"
+val databasePath = "/path/to/delta/database"
 Guidewire.index(manifestUri, databasePath)
 ```
 
 This command will run on a data increment by default, loading our previous checkpoints stored under 
 `${databasePath}/_checkpoints`. Should you need to reindex the whole of guidewire data, please provide optional 
-savemode parameter as follows
+`savemode` parameter as follows
 
 ```scala
 import org.apache.spark.sql.SaveMode
-Guidewire.index(manifestUri, databasePath, SaveMode.Overwrite)
+Guidewire.index(manifestUri, databasePath, saveMode = SaveMode.Overwrite)
 ```
 
 Guidewire files will not be stored but referenced from a delta location that can be defined as an external table
 
 ```roomsql
 CREATE DATABASE IF NOT EXISTS guidewire;
-CREATE EXTERNAL TABLE IF NOT EXISTS guidewire.policy_holders LOCATION '/path/to/delta/table';
+CREATE EXTERNAL TABLE IF NOT EXISTS guidewire.policy_holders LOCATION '/path/to/delta/database/policy_holders';
 ```
 
-Finally, we can query guidewire data and access all different versions at different timestamps.
+Finally, we can query guidewire data and access all its different versions at different timestamps.
 
 ```roomsql
 SELECT * FROM guidewire.policy_holders
@@ -64,3 +61,16 @@ This jar can be installed on a databricks [environment](https://docs.databricks.
 accordingly.
 
 <img src="https://docs.databricks.com/_images/select-library-aws.png" width="300">
+
+## Authors
+
+<antoine.amend@databricks.com>
+
+
+
+
+
+### TODO
+
+- Check delta standalone and file issue (absolute path)
+- 

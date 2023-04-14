@@ -217,6 +217,8 @@ object Guidewire extends Serializable {
         val fos = fs.create(deltaFile)
         fos.write(batch.toJson.getBytes(Charset.defaultCharset()))
         fos.close()
+        // Delta timestamps are driven by the modification time of a file
+        fs.setTimes(deltaFile, batch.timestamp, batch.timestamp)
       })
     }
   }
@@ -236,6 +238,8 @@ object Guidewire extends Serializable {
       val fos = fs.create(deltaFile)
       fos.write(batch.toJson.getBytes(Charset.defaultCharset()))
       fos.close()
+      // Delta timestamps are driven by the modification time of a file
+      fs.setTimes(deltaFile, batch.timestamp, batch.timestamp)
     })
   }
 
