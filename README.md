@@ -14,3 +14,9 @@ occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim 
 
 ___
 <antoine.amend@databricks.com>
+
+___
+
+## Approach
+
+<img src="images/reconcile.png" width=1000>
