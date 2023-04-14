@@ -7,13 +7,29 @@ import org.slf4j.{Logger, LoggerFactory}
 
 import java.nio.charset.Charset
 
-object GuidewireSparkUtils extends Serializable {
+object Guidewire extends Serializable {
 
   val logger: Logger = LoggerFactory.getLogger(this.getClass)
   val checkpointsTable = "_checkpoints"
   val deltaManifest = "_delta_log"
 
-  def readManifest(manifestLocation: String): Map[String, ManifestEntry] = {
+  def index(
+             manifestS3Uri: String,
+             databasePath: String,
+             saveMode: SaveMode = SaveMode.Append
+           ): Unit = {
+    val manifest = Guidewire.readManifest(manifestS3Uri)
+    val checkpoints: Map[String, Long] = saveMode match {
+      case SaveMode.Append => Guidewire.loadCheckpoints(databasePath)
+      case SaveMode.Overwrite => Map.empty[String, Long]
+      case _ => throw new IllegalArgumentException("Unsupported Save Mode")
+    }
+    val batches = Guidewire.processManifest(manifest, checkpoints)
+    Guidewire.saveDeltaLog(batches, databasePath, saveMode)
+    Guidewire.saveCheckpoints(batches, databasePath, saveMode)
+  }
+
+  private[guidewire] def readManifest(manifestLocation: String): Map[String, ManifestEntry] = {
     logger.info("Reading manifest file")
     val s3 = S3Access.build
     val manifestUri = new AmazonS3URI(manifestLocation)
@@ -22,10 +38,10 @@ object GuidewireSparkUtils extends Serializable {
     manifest
   }
 
-  def processManifest(
-                       manifest: Map[String, ManifestEntry],
-                       checkpoints: Map[String, Long] = Map.empty[String, Long]
-                     ): Map[String, List[GwBatch]] = {
+  private[guidewire] def processManifest(
+                                          manifest: Map[String, ManifestEntry],
+                                          checkpoints: Map[String, Long] = Map.empty[String, Long]
+                                        ): Map[String, List[GwBatch]] = {
 
     logger.info(s"Distributing ${manifest.size} table(s) against multiple executor(s)")
     val manifestRdd = SparkSession.active.sparkContext.makeRDD(manifest.toList).repartition(manifest.size)
@@ -97,22 +113,23 @@ object GuidewireSparkUtils extends Serializable {
     batchRdd.collect().toMap
   }
 
-  def saveCheckpoints(
-                       batches: Map[String, List[GwBatch]],
-                       databasePath: String
-                     ): Unit = {
+  private[guidewire] def saveCheckpoints(
+                                          batches: Map[String, List[GwBatch]],
+                                          databasePath: String,
+                                          saveMode: SaveMode
+                                        ): Unit = {
     logger.info("Saving checkpoints to delta")
     val spark = SparkSession.active
     import spark.implicits._
     val checkpoints = batches.filter(_._2.nonEmpty).map({ case (tableName, tableBatches) =>
       (tableName, tableBatches.maxBy(_.timestamp).timestamp, System.currentTimeMillis())
     }).toList.toDF("tableName", "lastProcessed", "executionTimestamp")
-    checkpoints.write.format("json").mode(SaveMode.Append).save(s"$databasePath/$checkpointsTable")
+    checkpoints.write.format("json").mode(saveMode).save(s"$databasePath/$checkpointsTable")
   }
 
-  def loadCheckpoints(
-                       databasePath: String
-                     ): Map[String, Long] = {
+  private[guidewire] def loadCheckpoints(
+                                          databasePath: String
+                                        ): Map[String, Long] = {
     val fs = FileSystem.get(SparkSession.active.sparkContext.hadoopConfiguration)
     if (fs.exists(new Path(s"$databasePath/$checkpointsTable"))) {
       logger.info("Loading checkpoints from delta")
@@ -126,7 +143,7 @@ object GuidewireSparkUtils extends Serializable {
     }
   }
 
-  def saveDeltaLog(batches: Map[String, List[GwBatch]], databasePath: String, saveMode: SaveMode = SaveMode.Append): Unit = {
+  private[guidewire] def saveDeltaLog(batches: Map[String, List[GwBatch]], databasePath: String, saveMode: SaveMode): Unit = {
     batches.foreach({ case (tableName, tableBatches) =>
       logger.info(s"Saving guidewire delta logs for table [$tableName]")
       saveMode match {
@@ -137,7 +154,7 @@ object GuidewireSparkUtils extends Serializable {
     })
   }
 
-  private def saveDeltaLogAppend(tableName: String, batches: List[GwBatch], databasePath: String): Unit = {
+  private[guidewire] def saveDeltaLogAppend(tableName: String, batches: List[GwBatch], databasePath: String): Unit = {
     val fs = FileSystem.get(SparkSession.active.sparkContext.hadoopConfiguration)
     val tablePath = new Path(databasePath, tableName)
     val deltaPath = new Path(tablePath, deltaManifest)
@@ -158,7 +175,7 @@ object GuidewireSparkUtils extends Serializable {
     }
   }
 
-  private def saveDeltaLogOverwrite(tableName: String, batches: List[GwBatch], databasePath: String): Unit = {
+  private[guidewire] def saveDeltaLogOverwrite(tableName: String, batches: List[GwBatch], databasePath: String): Unit = {
     val fs = FileSystem.get(SparkSession.active.sparkContext.hadoopConfiguration)
     val tablePath = new Path(databasePath, tableName)
     val deltaPath = new Path(tablePath, deltaManifest)

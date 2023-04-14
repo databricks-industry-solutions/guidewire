@@ -1,5 +1,7 @@
 package com.databricks.labs.guidewire
 
+import org.json4s._
+import org.json4s.jackson.Serialization._
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.must.Matchers
 
@@ -42,6 +44,21 @@ class EntityTest extends AnyFunSuite with Matchers {
       "\\\"type\\\":\\\"string\\\",\\\"nullable\\\":true,\\\"metadata\\\":{}},{\\\"name\\\":\\\"age\\\"," +
       "\\\"type\\\":\\\"integer\\\",\\\"nullable\\\":true,\\\"metadata\\\":{}}]}\",\"configuration\":{}," +
       "\"partitionColumns\":[],\"createdTime\":1234567890}}")
+  }
+
+  test("Serializing delta commit") {
+    val commit = GwCommit(
+      0L,
+      "append",
+      Map.empty,
+      "Serialization",
+      Map.empty,
+      isBlindAppend = true,
+      "tx"
+    )
+    val serialized = commit.toJson
+    implicit val formats: DefaultFormats.type = DefaultFormats
+    read[Map[String, GwCommit]](serialized).values.head must be(commit)
   }
 
   test("Serializing guidewire batch") {

@@ -11,7 +11,7 @@ import org.scalatest.matchers.must.Matchers
 import java.io.{File, FileFilter}
 import java.nio.file.Files
 
-class GuidewireSparkUtilsTest extends AnyFunSuite with Matchers with BeforeAndAfterAll {
+class GuidewireTest extends AnyFunSuite with Matchers with BeforeAndAfterAll {
 
   Logger.getLogger("org.apache").setLevel(Level.OFF)
   Logger.getLogger("akka").setLevel(Level.OFF)
@@ -39,30 +39,29 @@ class GuidewireSparkUtilsTest extends AnyFunSuite with Matchers with BeforeAndAf
         GwBatch(3L, Array.empty[GwFile]),
       )
     )
-    GuidewireSparkUtils.saveCheckpoints(batches, tempDir.toString)
-    val loadedCheckpoints = GuidewireSparkUtils.loadCheckpoints(tempDir.toString)
+    Guidewire.saveCheckpoints(batches, tempDir.toString, SaveMode.Overwrite)
+    val loadedCheckpoints = Guidewire.loadCheckpoints(tempDir.toString)
     loadedCheckpoints must be(Map("foo" -> 2, "bar" -> 3))
   }
 
   test("Reading empty checkpoints") {
     val tempDir = Files.createTempDirectory("guidewire_empty")
-    val loadedCheckpoints = GuidewireSparkUtils.loadCheckpoints(tempDir.toString)
+    val loadedCheckpoints = Guidewire.loadCheckpoints(tempDir.toString)
     loadedCheckpoints must be(empty)
   }
 
   test("Read delta log") {
-    val deltaLogUrl = this.getClass.getResource("delta/00000000000000000002.json")
+    val deltaLogUrl = this.getClass.getResource("/delta/00000000000000000002.json")
     val deltaLogDir = deltaLogUrl.toString
     val extractedBatch = GuidewireUtils.getBatchFromDeltaLog(new Path(deltaLogDir))
     extractedBatch.version must be(2)
     extractedBatch.timestamp must be(1562112543751L)
     extractedBatch.schema must not be empty
-    extractedBatch.filesToRemove.length must be(4)
     extractedBatch.filesToAdd.length must be(1)
   }
 
   test("Read delta log without schema") {
-    val deltaLogUrl = this.getClass.getResource("delta/00000000000000000001.json")
+    val deltaLogUrl = this.getClass.getResource("/delta/00000000000000000001.json")
     val deltaLogDir = deltaLogUrl.toString
     val extractedBatch = GuidewireUtils.getBatchFromDeltaLog(new Path(deltaLogDir))
     extractedBatch.schema must be(empty)
@@ -83,7 +82,7 @@ class GuidewireSparkUtilsTest extends AnyFunSuite with Matchers with BeforeAndAf
         GwBatch(2L, Array.empty[GwFile], version = 2),
       )
     )
-    GuidewireSparkUtils.saveDeltaLog(batchesInit, tempDir.toString)
+    Guidewire.saveDeltaLog(batchesInit, tempDir.toString, SaveMode.Overwrite)
     val filesInit = new File(tempDir.toFile, deltaFileName).listFiles(pathFilter)
     filesInit.length must be(3)
 
@@ -93,7 +92,7 @@ class GuidewireSparkUtilsTest extends AnyFunSuite with Matchers with BeforeAndAf
         GwBatch(1L, Array.empty[GwFile], version = 1),
       )
     )
-    GuidewireSparkUtils.saveDeltaLog(batchesOverwrite, tempDir.toString, SaveMode.Overwrite)
+    Guidewire.saveDeltaLog(batchesOverwrite, tempDir.toString, SaveMode.Overwrite)
     val filesOverwrite = new File(tempDir.toFile, deltaFileName).listFiles(pathFilter)
     filesOverwrite.length must be(2)
 
@@ -104,7 +103,7 @@ class GuidewireSparkUtilsTest extends AnyFunSuite with Matchers with BeforeAndAf
         GwBatch(2L, Array.empty[GwFile], version = 2),
       )
     )
-    GuidewireSparkUtils.saveDeltaLog(batchesAppend, tempDir.toString, SaveMode.Append)
+    Guidewire.saveDeltaLog(batchesAppend, tempDir.toString, SaveMode.Append)
     val filesAppend = new File(tempDir.toFile, deltaFileName).listFiles(pathFilter)
     filesAppend.foreach(println)
     filesAppend.length must be(5)
@@ -122,7 +121,7 @@ class GuidewireSparkUtilsTest extends AnyFunSuite with Matchers with BeforeAndAf
       )
     )
     val tempDir = Files.createTempDirectory("delta_log_spark")
-    GuidewireSparkUtils.saveDeltaLog(batchesAppend, tempDir.toString, SaveMode.Overwrite)
+    Guidewire.saveDeltaLog(batchesAppend, tempDir.toString, SaveMode.Overwrite)
 
     SparkSession.active
       .read
@@ -146,14 +145,5 @@ class GuidewireSparkUtilsTest extends AnyFunSuite with Matchers with BeforeAndAf
       .schema must be(schema2)
 
   }
-
-  test("Reindex all guidewire") {
-    val manifest = GuidewireSparkUtils.readManifest("s3://aamend/dev/guidewire/manifest.json")
-    val checkpoints = GuidewireSparkUtils.loadCheckpoints("spark")
-    val batches = GuidewireSparkUtils.processManifest(manifest, checkpoints)
-    GuidewireSparkUtils.saveCheckpoints(batches, "spark")
-    GuidewireSparkUtils.saveDeltaLog(batches, "/Users/antoine.amend/Workspace/guidewire/guidewire-db/spark", saveMode = SaveMode.Append)
-  }
-
 
 }

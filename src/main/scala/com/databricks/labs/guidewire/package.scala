@@ -1,7 +1,9 @@
 package com.databricks.labs
 
 import com.amazonaws.services.s3.AmazonS3URI
+import org.json4s.DefaultFormats
 import org.json4s.JsonDSL._
+import org.json4s.jackson.Json
 import org.json4s.jackson.JsonMethods._
 
 import java.util.UUID
@@ -76,6 +78,21 @@ package object guidewire {
 
   }
 
+  case class GwCommit(
+                       timestamp: Long,
+                       operation: String,
+                       operationParameters: Map[String, String],
+                       isolationLevel: String,
+                       operationMetrics: Map[String, Long],
+                       isBlindAppend: Boolean,
+                       txnId: String
+                     ) {
+
+    def toJson: String = {
+      Json(DefaultFormats).write(Map("commitInfo" -> this))
+    }
+  }
+
   case class GwBatch(
                       timestamp: Long,
                       filesToAdd: Array[GwFile],
@@ -123,42 +140,42 @@ package object guidewire {
       val totalBytes = filesToAdd.map(_.size).sum
       val totalFiles = filesToAdd.length
 
-      if (schema.isDefined) {
-        sb.append(compact(render("commitInfo" -> (
-          ("timestamp" -> timestamp) ~
-            ("operation" -> "WRITE") ~
-            ("operationParameters" -> (
-              ("mode" -> "Overwrite") ~
-                ("partitionBy" -> "[]")
-              )) ~
-            ("isolationLevel" -> "Serializable") ~
-            ("operationMetrics" -> (
-              ("numFiles" -> totalFiles) ~
-                ("numOutputBytes" -> totalBytes)
-              )) ~
-            ("isBlindAppend" -> false) ~
-            ("txnId" -> txnId)
-          ))))
+      val commit = if (schema.isDefined) {
+        GwCommit(
+          timestamp = timestamp,
+          operation = "WRITE",
+          operationParameters = Map(
+            "mode" -> "Overwrite",
+            "partitionBy" -> "[]"
+          ),
+          isolationLevel = "Serializable",
+          operationMetrics = Map(
+            "numFiles" -> totalFiles,
+            "numOutputBytes" -> totalBytes
+          ),
+          isBlindAppend = false,
+          txnId = txnId
+        )
       } else {
-        sb.append(compact(render("commitInfo" -> (
-          ("timestamp" -> timestamp) ~
-            ("operation" -> "WRITE") ~
-            ("operationParameters" -> (
-              ("mode" -> "Append") ~
-                ("partitionBy" -> "[]")
-              )) ~
-            ("isolationLevel" -> "Serializable") ~
-            ("operationMetrics" -> (
-              ("numFiles" -> totalFiles) ~
-                ("numOutputBytes" -> totalBytes)
-              )) ~
-            ("isBlindAppend" -> true) ~
-            ("txnId" -> txnId)
-          ))))
+        GwCommit(
+          timestamp = timestamp,
+          operation = "WRITE",
+          operationParameters = Map(
+            "mode" -> "Append",
+            "partitionBy" -> "[]"
+          ),
+          isolationLevel = "Serializable",
+          operationMetrics = Map(
+            "numFiles" -> totalFiles,
+            "numOutputBytes" -> totalBytes
+          ),
+          isBlindAppend = true,
+          txnId = txnId
+        )
       }
-
+      println(commit.toJson)
+      sb.append(commit.toJson)
       sb.toString()
-
     }
 
   }

@@ -55,21 +55,31 @@ object GuidewireUtils {
   def getBatchFromDeltaLog(deltaLog: Path): GwBatch = {
     val fs = FileSystem.get(SparkSession.active.sparkContext.hadoopConfiguration)
     val logContent = IOUtils.toString(fs.open(deltaLog), StandardCharsets.UTF_8)
-    val isOverwrite = logContent.contains("\"mode\":\"Overwrite\"")
     val version = GuidewireUtils.getVersionFromDeltaFileName(deltaLog.getName)
     val allFiles = GuidewireUtils.readAddFilesFromDeltaLog(logContent)
-    val creationTime = fs.getFileStatus(deltaLog).getModificationTime
+    val commitInfo = GuidewireUtils.getCommitInfo(logContent)
+    // We do not really care of committed schema, we just want to know what files were added
+    val schema = if (commitInfo.get.operationParameters.getOrElse("mode", "Nil") == "Overwrite") {
+      Some(GwSchema("{}", commitInfo.get.timestamp))
+    } else None: Option[GwSchema]
+    require(commitInfo.isDefined, "Could not find commit information")
     GwBatch(
-      creationTime,
+      commitInfo.get.timestamp,
       allFiles,
-      // We do not really care of committed schema, we just want to read back files to add or remove
-      schema = if (isOverwrite) Some(GwSchema("{}", creationTime)) else None: Option[GwSchema],
+      schema = schema,
       version = version
     )
   }
 
   def getVersionFromDeltaFileName(deltaLogPath: String): Int = {
     deltaLogPath.split("\\.").head.toInt
+  }
+
+  def getCommitInfo(deltaLogJson: String): Option[GwCommit] = {
+    implicit val formats: DefaultFormats.type = DefaultFormats
+    deltaLogJson.split("\n").flatMap(line => {
+      Try(read[Map[String, GwCommit]](line)).toOption
+    }).flatMap(_.values).headOption
   }
 
   def readAddFilesFromDeltaLog(deltaLogJson: String): Array[GwFile] = {
@@ -80,10 +90,11 @@ object GuidewireUtils {
   }
 
   def readSchema(content: Array[Byte]): String = {
-    val parquetFile = new ParquetStream(content)
+    val parquetFile = new ParquetStreamScala(content)
     val parquetReader: ParquetReader[GenericRecord] = AvroParquetReader.builder[GenericRecord](parquetFile).build
     val avroSchema: Schema = parquetReader.read.getSchema
     SchemaConverters.toSqlType(avroSchema).dataType.asInstanceOf[StructType].json
   }
+
 
 }
