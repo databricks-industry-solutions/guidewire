@@ -20,3 +20,47 @@ ___
 ## Approach
 
 <img src="images/reconcile.png" width=1000>
+
+## Usage
+
+```scala
+import com.databricks.labs.guidewire.Guidewire
+val manifestUri = "s3://bucket/key/manifest.json"
+val databasePath = "/path/to/delta/table"
+Guidewire.index(manifestUri, databasePath)
+```
+
+This command will run on a data increment by default, loading our previous checkpoints stored under 
+`${databasePath}/_checkpoints`. Should you need to reindex the whole of guidewire data, please provide optional 
+savemode parameter as follows
+
+```scala
+import org.apache.spark.sql.SaveMode
+Guidewire.index(manifestUri, databasePath, SaveMode.Overwrite)
+```
+
+Guidewire files will not be stored but referenced from a delta location that can be defined as an external table
+
+```roomsql
+CREATE DATABASE IF NOT EXISTS guidewire;
+CREATE EXTERNAL TABLE IF NOT EXISTS guidewire.policy_holders LOCATION '/path/to/delta/table';
+```
+
+Finally, we can query guidewire data and access all different versions at different timestamps.
+
+```roomsql
+SELECT * FROM guidewire.policy_holders
+VERSION AS OF 2
+```
+
+## Install
+
+```shell
+mvn clean package -Pshaded
+```
+
+Following maven standard, add profile `shaded` to generate a standalone jar file with all dependencies included. 
+This jar can be installed on a databricks [environment](https://docs.databricks.com/libraries/workspace-libraries.html) 
+accordingly.
+
+<img src="https://docs.databricks.com/_images/select-library-aws.png" width="300">
