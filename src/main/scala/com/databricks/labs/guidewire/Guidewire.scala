@@ -95,12 +95,13 @@ object Guidewire extends Serializable {
         // We only want to process recent information (since last checkpoint or 0 if overwrite)
         // Equally, we want to ensure folder was entirely committed and therefore defined in manifest
         val schemaCommittedTimestamps = schemaTimestamps
-          .filter(_ <= lastUpdatedTs.toLong)  // Ensure directory we find was committed to manifest
-          .filter(_ > lastProcessedTimestamp) // Ensure directory was not yet processed
           .sorted
+          .zipWithIndex
+          .filter(_._1 <= lastUpdatedTs.toLong)  // Ensure directory we find was committed to manifest
+          .filter(_._1 > lastProcessedTimestamp) // Ensure directory was not yet processed
 
         // Get files for each timestamp folder
-        schemaCommittedTimestamps.zipWithIndex.map({ case (committedTimestamp, j) =>
+        schemaCommittedTimestamps.map({ case (committedTimestamp, j) =>
 
           // List all parquet files
           val timestampDirectory = s"${dataFilesUri.getKey}/$schemaId/$committedTimestamp/"
