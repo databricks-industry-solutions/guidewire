@@ -1,7 +1,6 @@
 package com.databricks.labs.guidewire
 
 import org.apache.hadoop.fs.Path
-import org.apache.log4j.{Level, Logger}
 import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}
 import org.apache.spark.sql.{SaveMode, SparkSession}
 import org.scalatest.BeforeAndAfterAll
@@ -13,13 +12,12 @@ import java.nio.file.Files
 
 class GuidewireTest extends AnyFunSuite with Matchers with BeforeAndAfterAll {
 
-  Logger.getLogger("org.apache").setLevel(Level.OFF)
-  Logger.getLogger("akka").setLevel(Level.OFF)
-
   override def beforeAll(): Unit = {
     SparkSession.builder()
       .master("local[*]")
       .appName("Guidewire")
+      .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+      .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
       .getOrCreate()
   }
 
@@ -77,7 +75,7 @@ class GuidewireTest extends AnyFunSuite with Matchers with BeforeAndAfterAll {
     val deltaFileName = "foo" + File.separator + "_delta_log"
     val batchesInit = Map(
       "foo" -> List(
-        GwBatch(0L, Array.empty[GwFile], version = 0),
+        GwBatch(0L, Array.empty[GwFile]),
         GwBatch(1L, Array.empty[GwFile], version = 1),
         GwBatch(2L, Array.empty[GwFile], version = 2),
       )
@@ -88,7 +86,7 @@ class GuidewireTest extends AnyFunSuite with Matchers with BeforeAndAfterAll {
 
     val batchesOverwrite = Map(
       "foo" -> List(
-        GwBatch(0L, Array.empty[GwFile], version = 0),
+        GwBatch(0L, Array.empty[GwFile]),
         GwBatch(1L, Array.empty[GwFile], version = 1),
       )
     )
@@ -98,7 +96,7 @@ class GuidewireTest extends AnyFunSuite with Matchers with BeforeAndAfterAll {
 
     val batchesAppend = Map(
       "foo" -> List(
-        GwBatch(0L, Array.empty[GwFile], version = 0),
+        GwBatch(0L, Array.empty[GwFile]),
         GwBatch(1L, Array.empty[GwFile], version = 1),
         GwBatch(2L, Array.empty[GwFile], version = 2),
       )
@@ -115,7 +113,7 @@ class GuidewireTest extends AnyFunSuite with Matchers with BeforeAndAfterAll {
     val schema2 = StructType(Seq(StructField("foo", StringType, nullable = true), StructField("bar", StringType, nullable = true), StructField("helloWorld", IntegerType, nullable = true)))
     val batchesAppend = Map(
       "foo" -> List(
-        GwBatch(0L, Array.empty[GwFile], version = 0, schema = Some(GwSchema(schema0.json, 0L))),
+        GwBatch(0L, Array.empty[GwFile], schema = Some(GwSchema(schema0.json, 0L))),
         GwBatch(1L, Array.empty[GwFile], version = 1, schema = Some(GwSchema(schema1.json, 1L))),
         GwBatch(2L, Array.empty[GwFile], version = 2, schema = Some(GwSchema(schema2.json, 2L))),
       )
