@@ -4,7 +4,7 @@ import org.apache.parquet.io.{DelegatingSeekableInputStream, InputFile, Seekable
 
 import java.io.ByteArrayInputStream
 
-class ParquetStreamScala(data: Array[Byte]) extends InputFile {
+class ParquetStream(data: Array[Byte]) extends InputFile {
 
   override def getLength: Long = data.length
 

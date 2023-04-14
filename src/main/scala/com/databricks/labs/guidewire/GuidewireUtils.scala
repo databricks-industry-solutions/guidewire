@@ -90,7 +90,7 @@ object GuidewireUtils {
   }
 
   def readSchema(content: Array[Byte]): String = {
-    val parquetFile = new ParquetStreamScala(content)
+    val parquetFile = new ParquetStream(content)
     val parquetReader: ParquetReader[GenericRecord] = AvroParquetReader.builder[GenericRecord](parquetFile).build
     val avroSchema: Schema = parquetReader.read.getSchema
     SchemaConverters.toSqlType(avroSchema).dataType.asInstanceOf[StructType].json

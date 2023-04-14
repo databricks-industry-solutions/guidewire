@@ -2,7 +2,7 @@
 
 [![DBR](https://img.shields.io/badge/DBR-12.2ML-red?logo=databricks&style=for-the-badge)](https://docs.databricks.com/release-notes/runtime/12.2.html)
 [![CLOUD](https://img.shields.io/badge/CLOUD-AWS-blue?logo=googlecloud&style=for-the-badge)](https://databricks.com/try-databricks)
-[![POC](https://img.shields.io/badge/POC-10_days-green?style=for-the-badge)](https://databricks.com/try-databricks)
+[![POC](https://img.shields.io/badge/POC-1_day-green?style=for-the-badge)](https://databricks.com/try-databricks)
 
 **Interpreting guidewire CDA as delta table:** 
 *Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna 

@@ -1,5 +1,6 @@
 package com.databricks.labs.guidewire
 
+import org.apache.commons.io.IOUtils
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.must.Matchers
 
@@ -80,7 +81,7 @@ class GuidewireUtilsTest extends AnyFunSuite with Matchers {
 
   test("Reading parquet file") {
     val parquetStream: InputStream = this.getClass.getResourceAsStream("/example.snappy.parquet")
-    val parquetBytes = parquetStream.readAllBytes()
+    val parquetBytes = IOUtils.toByteArray(parquetStream)
     val schemaJson = GuidewireUtils.readSchema(parquetBytes)
     val expected = "{\"type\":\"struct\",\"fields\":[{\"name\":\"firstName\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}},{\"name\":\"lastName\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}},{\"name\":\"age\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}"
     schemaJson must be(expected)

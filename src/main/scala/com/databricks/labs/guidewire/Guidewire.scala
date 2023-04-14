@@ -13,14 +13,6 @@ object Guidewire extends Serializable {
   val checkpointsTable = "_checkpoints"
   val deltaManifest = "_delta_log"
 
-  def index(
-             manifestS3Uri: String,
-             databasePath: String,
-             saveMode: String = "Append"
-           ): Unit = {
-    index(manifestS3Uri, databasePath, SaveMode.valueOf(saveMode))
-  }
-
   /**
    * Entry point for guidewire connector
    * @param manifestS3Uri S3 location were guidewire manifest can be found
