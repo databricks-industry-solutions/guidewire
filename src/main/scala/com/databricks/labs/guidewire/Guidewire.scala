@@ -1,11 +1,16 @@
 package com.databricks.labs.guidewire
 
 import com.amazonaws.services.s3.AmazonS3URI
+import io.delta.standalone.actions.{Action, Metadata}
+import io.delta.standalone.{DeltaLog, Operation}
+import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.sql.{SaveMode, SparkSession, functions}
+import org.apache.spark.util.SerializableConfiguration
 import org.slf4j.{Logger, LoggerFactory}
 
-import java.nio.charset.Charset
+import java.util
+import scala.collection.JavaConverters._
 
 object Guidewire extends Serializable {
 
@@ -15,18 +20,16 @@ object Guidewire extends Serializable {
 
   /**
    * Entry point for guidewire connector
+   *
    * @param manifestS3Uri S3 location were guidewire manifest can be found
-   * @param databasePath output location of delta table. Each tableName will be a child of that path
-   * @param saveMode whether we want to "Overwrite" or "Append" (by default)
+   * @param databasePath  output location of delta table. Each tableName will be a child of that path
+   * @param saveMode      whether we want to "Overwrite" or "Append" (by default)
    */
   def index(
              manifestS3Uri: String,
              databasePath: String,
              saveMode: SaveMode = SaveMode.Append
            ): Unit = {
-
-    // We first access manifest
-    val manifest = Guidewire.readManifest(manifestS3Uri)
 
     // If Overwrite, we do not care about checkpoints as we will be reindexing the whole table
     // For Append, we first load last processed timestamp for each table
@@ -37,11 +40,11 @@ object Guidewire extends Serializable {
       case _ => throw new IllegalArgumentException("Only [Append] or [Overwrite] are supported")
     }
 
-    // Given the list of available files (manifest) and optional checkpoints, we process each table in parallel
-    val batches = Guidewire.processManifest(manifest, checkpoints)
+    // We access guidewire manifest
+    val manifest = Guidewire.readManifest(manifestS3Uri)
 
-    // Saving all commits to Delta Log, overwriting or appending
-    Guidewire.saveDeltaLog(batches, databasePath, saveMode)
+    // Given the list of available files (manifest) and optional checkpoints, we process each table in parallel
+    val batches = Guidewire.processManifest(manifest, checkpoints, databasePath)
 
     // Upon success, we save new checkpoints for future index
     Guidewire.saveCheckpoints(batches, databasePath, saveMode)
@@ -58,14 +61,24 @@ object Guidewire extends Serializable {
 
   private[guidewire] def processManifest(
                                           manifest: Map[String, ManifestEntry],
-                                          checkpoints: Map[String, Long] = Map.empty[String, Long]
-                                        ): Map[String, List[GwBatch]] = {
+                                          checkpoints: Map[String, Long] = Map.empty[String, Long],
+                                          databasePath: String
+                                        ): Map[String, List[BatchResult]] = {
 
     logger.info(s"Distributing ${manifest.size} table(s) against multiple executor(s)")
     val manifestRdd = SparkSession.active.sparkContext.makeRDD(manifest.toList).repartition(manifest.size)
+
     manifestRdd.cache() // materialize partitioning
     manifestRdd.count()
 
+    // Serialize some configuration to be used at executor level
+    val hadoopConfiguration = SparkSession.active.sparkContext.hadoopConfiguration
+    val hadoopConfigurationS = new SerializableConfiguration(hadoopConfiguration)
+    val hadoopConfigurationB = SparkSession.active.sparkContext.broadcast(hadoopConfigurationS)
+    SparkSession.active.sparkContext.hadoopConfiguration
+
+
+    val databasePathB = SparkSession.active.sparkContext.broadcast(databasePath)
     val checkpointsB = if (checkpoints.nonEmpty) {
       logger.info("Processing guidewire as data increment")
       SparkSession.active.sparkContext.broadcast(checkpoints)
@@ -75,7 +88,10 @@ object Guidewire extends Serializable {
     }
 
     // Distributed process, each executor will handle a given table
-    val batchRdd = manifestRdd.map({ case (tableName, manifestEntry) =>
+    manifestRdd.map({ case (tableName, manifestEntry) =>
+
+      // Deserialize hadoop configuration
+      val hadoopConfiguration = hadoopConfigurationB.value.value
 
       // Retrieve last checkpoints
       val lastProcessedTimestamp = checkpointsB.value.getOrElse(tableName, -1L)
@@ -97,7 +113,7 @@ object Guidewire extends Serializable {
         val schemaCommittedTimestamps = schemaTimestamps
           .sorted
           .zipWithIndex
-          .filter(_._1 <= lastUpdatedTs.toLong)  // Ensure directory we find was committed to manifest
+          .filter(_._1 <= lastUpdatedTs.toLong) // Ensure directory we find was committed to manifest
           .filter(_._1 > lastProcessedTimestamp) // Ensure directory was not yet processed
 
         // Get files for each timestamp folder
@@ -109,55 +125,104 @@ object Guidewire extends Serializable {
 
           // For the first committed timestamp folder in a given schema, extract schema from a sample parquet file
           // This assumes schema consistency within guidewire (same schema over different subfolder timestamps)
-          val gwSchema = if (j == 0) {
+          val metadata = if (j == 0) {
             // For convenience, let's read the smallest file available that we will read in memory
-            val sampleFile = timestampFiles.minBy(_.size)
+            val sampleFile = timestampFiles.minBy(_.getSize)
             // And return associated spark schema, serialized as json as per delta requirement
-            val sampleSchema = GuidewireUtils.readSchema(s3.readByteArray(dataFilesUri.getBucket, sampleFile.getKey))
-            Some(GwSchema(sampleSchema, committedTimestamp))
+            val fileKey = new AmazonS3URI(sampleFile.getPath).getKey
+            val sampleSchema = GuidewireUtils.readSchema(s3.readByteArray(dataFilesUri.getBucket, fileKey))
+            Some(Metadata.builder().schema(sampleSchema).build())
           } else {
             // This is not the first committed folder, no need to define schema
-            None: Option[GwSchema]
+            None: Option[Metadata]
           }
 
           // Wrap all commit information into a case class and keep track of the order that was processed
-          val gwBatch = GwBatch(committedTimestamp, filesToAdd = timestampFiles, schema = gwSchema)
-          (gwBatch, (i, j))
-
+          (Batch(schemaId, committedTimestamp, timestampFiles, metadata), (i, j))
         })
-
-      }).sortBy({ case (_, (schemaId, commitId)) =>
-        // Sort all batches (schema first, then timestamp)
-        (schemaId, commitId)
-      }).zipWithIndex.map({ case ((batch, _), commitId) =>
-        // And get Batch version Id used for delta log
-        batch.copy(version = commitId)
       })
+        // Sort all batches (schema first, then timestamp)
+        .sortBy({ case (_, (schemaId, commitId)) => (schemaId, commitId) })
+        .map(_._1)
 
-      // For each table, we have the associated batch
-      // Every time schema changes, we need to ensure previous files are de-registered from delta log
-      val accumulatedBatches = GuidewireUtils.unregisterFilesPropagation(batches)
-      (tableName, accumulatedBatches)
+      if (lastProcessedTimestamp > 0) {
+        // We have checkpoints, this is an append function
+        saveDeltaLogAppend(hadoopConfiguration, tableName, batches, databasePathB.value)
+      } else {
+        // We do not have checkpoint for this table yet or defined SaveMode.Overwrite
+        saveDeltaLogOverwrite(hadoopConfiguration, tableName, batches, databasePathB.value)
+      }
 
+      // Keep track of processed timestamps so that we can save checkpoints
+      (tableName, batches.map(b => BatchResult(b.schemaId, b.commitTimestamp, b.filesToAdd.size)))
+
+    }).collect().toMap
+
+  }
+
+  private[guidewire] def saveDeltaLogOverwrite(
+                                                hadoopConfiguration: Configuration,
+                                                tableName: String,
+                                                batches: List[Batch],
+                                                databasePath: String
+                                              ): Unit = {
+
+    val tablePath = new Path(databasePath + Path.SEPARATOR + tableName)
+    val fs = FileSystem.get(hadoopConfiguration)
+    if (fs.exists(tablePath)) fs.delete(tablePath, true)
+    saveDeltaLogAppend(hadoopConfiguration, tableName, batches, databasePath)
+  }
+
+  private[guidewire] def saveDeltaLogAppend(
+                                             hadoopConfiguration: Configuration,
+                                             tableName: String,
+                                             batches: List[Batch],
+                                             databasePath: String
+                                           ): Unit = {
+
+    val tablePath = databasePath + Path.SEPARATOR + tableName
+    batches.map(batch => {
+      val log = DeltaLog.forTable(hadoopConfiguration, tablePath)
+      val version = batch.metadata match {
+        case Some(metadata) =>
+          // Schema has changed, we overwrite table with new files and new schema
+          val filesToRemove = log.snapshot().getAllFiles.asScala.map(_.remove()).asJava
+          val filesToAdd = batch.filesToAdd.asJava
+          val actions = new util.ArrayList[Action]()
+          actions.addAll(filesToRemove)
+          actions.addAll(filesToAdd)
+          val tx = log.startTransaction()
+          tx.updateMetadata(metadata)
+          val operation = if (log.tableExists()) {
+            new Operation(Operation.Name.UPGRADE_SCHEMA)
+          } else {
+            new Operation(Operation.Name.CREATE_TABLE)
+          }
+          tx.commit(actions, operation, "guidewire")
+          tx.readVersion()
+        case None =>
+          val tx = log.startTransaction()
+          val operation = new Operation(Operation.Name.WRITE)
+          tx.commit(batch.filesToAdd.asJava, operation, "guidewire")
+          tx.readVersion()
+      }
+      (batch, version)
     })
-
-    // We got a map as input, let's collect back as a map
-    // We distributed this process as guidewire manifest that may contain lots of table
-    // But the resulting process is a collection that fits well in memory (no file were hurt in that process)
-    batchRdd.collect().toMap
   }
 
   private[guidewire] def saveCheckpoints(
-                                          batches: Map[String, List[GwBatch]],
+                                          batches: Map[String, List[BatchResult]],
                                           databasePath: String,
                                           saveMode: SaveMode
                                         ): Unit = {
     logger.info("Saving checkpoints to delta")
     val spark = SparkSession.active
     import spark.implicits._
-    val checkpoints = batches.filter(_._2.nonEmpty).map({ case (tableName, tableBatches) =>
-      (tableName, tableBatches.maxBy(_.timestamp).timestamp, System.currentTimeMillis())
-    }).toList.toDF("tableName", "lastProcessed", "executionTimestamp")
+    val checkpoints = batches.flatMap({ case (tableName, tableBatches) =>
+      tableBatches.map(tableBatch => {
+        (tableName, tableBatch.schemaId, tableBatch.commitTimestamp, tableBatch.numFiles)
+      })
+    }).toList.toDF("tableName", "processedSchema", "processedTimestamp", "processedFiles")
     checkpoints.write.format("delta").mode(saveMode).save(s"$databasePath/$checkpointsTable")
   }
 
@@ -166,81 +231,19 @@ object Guidewire extends Serializable {
     if (fs.exists(new Path(s"$databasePath/$checkpointsTable"))) {
       logger.info("Loading checkpoints from delta")
       val batchesDF = SparkSession.active.read.format("delta").load(s"$databasePath/$checkpointsTable")
-      batchesDF.groupBy("tableName").agg(functions.max("lastProcessed").alias("lastProcessed")).rdd.map(r => {
-        (r.getAs[String]("tableName"), r.getAs[Long]("lastProcessed"))
-      }).collect().toMap
+      batchesDF
+        .groupBy("tableName")
+        .agg(functions.max("processedTimestamp").alias("processedTimestamp"))
+        .rdd
+        .map(r => {
+          (r.getAs[String]("tableName"), r.getAs[Long]("processedTimestamp"))
+        })
+        .collect()
+        .toMap
     } else {
       logger.warn("No previous checkpoints found")
       Map.empty[String, Long]
     }
-  }
-
-  private[guidewire] def saveDeltaLog(
-                                       batches: Map[String, List[GwBatch]],
-                                       databasePath: String,
-                                       saveMode: SaveMode
-                                     ): Unit = {
-    batches.foreach({ case (tableName, tableBatches) =>
-      logger.info(s"Saving guidewire delta logs for table [$tableName], mode = $saveMode")
-      saveMode match {
-        case SaveMode.Overwrite => saveDeltaLogOverwrite(tableName, tableBatches, databasePath)
-        case SaveMode.Append => saveDeltaLogAppend(tableName, tableBatches, databasePath)
-        case _ => throw new IllegalArgumentException("Only [Append] or [Overwrite] are supported")
-      }
-    })
-  }
-
-  private[guidewire] def saveDeltaLogAppend(
-                                             tableName: String,
-                                             batches: List[GwBatch],
-                                             databasePath: String
-                                           ): Unit = {
-    val fs = FileSystem.get(SparkSession.active.sparkContext.hadoopConfiguration)
-    val tablePath = new Path(databasePath, tableName)
-    val deltaPath = new Path(tablePath, deltaManifest)
-    if (!fs.exists(deltaPath)) {
-      // Table does not exist, so equivalent of overwrite
-      saveDeltaLogOverwrite(tableName, batches, databasePath)
-    } else {
-      // Here comes a nasty surprise...
-      // As we append files, we need to keep track of previous versions in order to
-      val deltaFiles = fs.listStatus(deltaPath)
-      val previousBatches = deltaFiles.map(deltaFile => GuidewireUtils.getBatchFromDeltaLog(deltaFile.getPath)).toList
-      // Start this new increment with the correct version number
-      val lastVersion = previousBatches.map(_.version).max
-      val updatedBatches = previousBatches ++ batches.map(b => b.copy(version = b.version + lastVersion + 1))
-      // Retrieve the list of all previously added files as they may need to be now marked as "remove" (edge conditions)
-      val accumulatedBatches = GuidewireUtils.unregisterFilesPropagation(updatedBatches.sortBy(_.version))
-      // Make sure we only persist the new batches, starting from last seen version
-      accumulatedBatches.filter(_.version > lastVersion).foreach(batch => {
-        val deltaFile = new Path(deltaPath, GuidewireUtils.generateFileName(batch.version))
-        val fos = fs.create(deltaFile)
-        fos.write(batch.toJson.getBytes(Charset.defaultCharset()))
-        fos.close()
-        // Delta timestamps are driven by the modification time of a file
-        fs.setTimes(deltaFile, batch.timestamp, batch.timestamp)
-      })
-    }
-  }
-
-  private[guidewire] def saveDeltaLogOverwrite(
-                                                tableName: String,
-                                                batches: List[GwBatch],
-                                                databasePath: String
-                                              ): Unit = {
-    val fs = FileSystem.get(SparkSession.active.sparkContext.hadoopConfiguration)
-    val tablePath = new Path(databasePath, tableName)
-    val deltaPath = new Path(tablePath, deltaManifest)
-    if (fs.exists(deltaPath)) fs.delete(deltaPath, true)
-    fs.mkdirs(deltaPath)
-    batches.foreach(batch => {
-      val deltaFile = new Path(deltaPath, GuidewireUtils.generateFileName(batch.version))
-      val fos = fs.create(deltaFile)
-      fos.write(batch.toJson.getBytes(Charset.defaultCharset()))
-      fos.close()
-      // Delta timestamps are driven by the modification time of a file
-      fs.setTimes(deltaFile, batch.timestamp, batch.timestamp)
-    })
   }
 
 }

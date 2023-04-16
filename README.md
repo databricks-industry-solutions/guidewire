@@ -1,7 +1,7 @@
 <img src=https://d1r5llqwmkrl74.cloudfront.net/notebooks/fsi/fs-lakehouse-logo-transparent.png width="600px">
 
-[![DBR](https://img.shields.io/badge/DBR-12.2ML-red?logo=databricks&style=for-the-badge)](https://docs.databricks.com/release-notes/runtime/12.2.html)
-[![CLOUD](https://img.shields.io/badge/CLOUD-AWS-blue?logo=googlecloud&style=for-the-badge)](https://databricks.com/try-databricks)
+[![DBR](https://img.shields.io/badge/DBR-12.2-red?logo=databricks&style=for-the-badge)](https://docs.databricks.com/release-notes/runtime/12.2.html)
+[![CLOUD](https://img.shields.io/badge/CLOUD-AWS-orange?style=for-the-badge)](https://databricks.com/try-databricks)
 [![POC](https://img.shields.io/badge/POC-1_day-green?style=for-the-badge)](https://databricks.com/try-databricks)
 
 **Interpreting guidewire CDA as delta table:** 
@@ -65,9 +65,6 @@ accordingly.
 ## Authors
 
 <antoine.amend@databricks.com>
-
-
-
 
 
 ### TODO

@@ -2,9 +2,11 @@ package com.databricks.labs.guidewire
 
 import com.amazonaws.services.s3.model.ListObjectsRequest
 import com.amazonaws.services.s3.{AmazonS3, AmazonS3ClientBuilder}
+import io.delta.standalone.actions.AddFile
 import org.apache.commons.io.IOUtils
 import org.slf4j.LoggerFactory
 
+import java.util
 import scala.collection.JavaConverters._
 
 object S3Access {
@@ -30,7 +32,7 @@ class S3Access() extends Serializable {
     results
   }
 
-  def listParquetFiles(bucketName: String, bucketKey: String): Array[GwFile] = {
+  def listParquetFiles(bucketName: String, bucketKey: String): Array[AddFile] = {
     logger.info(s"Listing parquet files in [$bucketKey]")
     val listObjectsRequest = new ListObjectsRequest(bucketName, bucketKey, null, "/", Int.MaxValue)
     val response = s3Client.listObjects(listObjectsRequest)
@@ -39,7 +41,8 @@ class S3Access() extends Serializable {
       !fileName.startsWith(".") && fileName.contains(".parquet")
     }).map(summary => {
       val filePath = s"s3://${summary.getBucketName}/${summary.getKey}"
-      GwFile(filePath, summary.getSize, summary.getLastModified.getTime)
+      val jmap = new util.HashMap[String, String]()
+      new AddFile(filePath, jmap, summary.getSize, summary.getLastModified.getTime, true, null, jmap)
     }).toArray
     logger.info(s"Found ${results.length} parquet file(s) for schema [$bucketKey]")
     results

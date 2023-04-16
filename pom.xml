@@ -43,6 +43,7 @@
         <scala.binary.version>2.12</scala.binary.version>
         <spark.version>3.3.2</spark.version>
         <delta.version>2.2.0</delta.version>
+        <delta.standalone.version>0.6.0</delta.standalone.version>
         <java.version>1.8</java.version>
     </properties>
 
@@ -78,6 +79,11 @@
             <scope>provided</scope>
         </dependency>
         <dependency>
+            <groupId>io.delta</groupId>
+            <artifactId>delta-standalone_${scala.binary.version}</artifactId>
+            <version>${delta.standalone.version}</version>
+        </dependency>
+        <dependency>
             <groupId>org.apache.parquet</groupId>
             <artifactId>parquet-avro</artifactId>
             <version>1.12.1</version>
@@ -92,6 +98,11 @@
             <groupId>com.amazonaws</groupId>
             <artifactId>aws-java-sdk-s3</artifactId>
             <version>1.12.261</version>
+        </dependency>
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-java-sdk-bundle</artifactId>
+            <version>1.12.180</version>
         </dependency>
         <dependency>
             <groupId>org.apache.hadoop</groupId>
