@@ -23,14 +23,15 @@ Guidewire supports data access to analytical environment via their Cloud Data Ac
 ([CDA](https://developer.guidewire.com/introducing-guidewire-data-platform/)). Storing files as individual parquet files
 under different timestamps and schema evolution is unfortunately making processing difficult for end users. Instead
 of processing files individually, why wouldn't we generate the `delta log` manifest files to only read information
-we need, when we need it without having to download, process and reconcile complex information. This is the principle
-behind this initiative.
+we need, when we need it, without having to download, process and reconcile complex information? This is the principle
+behind this initiative. The generated delta table will not be materialized (data will not be physically moving) but act
+as a [shallow clone](https://docs.databricks.com/sql/language-manual/delta-clone.html) to guidewire data. 
 
 <img src="images/approach.png" width=1000>
 
 More specifically, we will process all Guidewire tables independently, in parallel (i.e. as a spark job), where each
 task will consist in only listing parquet files and folders and generating delta log accordingly. From an end user 
-standpoint, guidewire will look as Delta and can be processed as such, reducing processing time from days to seconds 
+standpoint, guidewire will look as a Delta table and be processed as such, reducing processing time from days to seconds 
 (since we do not have to download and process each file through many spark jobs).
 
 <img src="images/reconcile.png" width=1000>
