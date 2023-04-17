@@ -27,19 +27,19 @@ class GuidewireTest extends AnyFunSuite with Matchers with BeforeAndAfterAll {
     val tempDir = Files.createTempDirectory("guidewire")
     val batches = Map(
       "foo" -> List(
-        GwBatch(0L, Array.empty[GwFile]),
-        GwBatch(1L, Array.empty[GwFile]),
-        GwBatch(2L, Array.empty[GwFile]),
+        BatchResult("121", 1L, 1),
+        BatchResult("122", 2L, 2),
+        BatchResult("123", 3L, 3),
       ),
       "bar" -> List(
-        GwBatch(1L, Array.empty[GwFile]),
-        GwBatch(2L, Array.empty[GwFile]),
-        GwBatch(3L, Array.empty[GwFile]),
+        BatchResult("121", 1L, 1),
+        BatchResult("122", 2L, 2),
+        BatchResult("123", 3L, 3),
       )
     )
     Guidewire.saveCheckpoints(batches, tempDir.toString, SaveMode.Overwrite)
     val loadedCheckpoints = Guidewire.loadCheckpoints(tempDir.toString)
-    loadedCheckpoints must be(Map("foo" -> 2, "bar" -> 3))
+    loadedCheckpoints must be(Map("foo" -> 3, "bar" -> 3))
   }
 
   test("Reading empty checkpoints") {
@@ -66,6 +66,7 @@ class GuidewireTest extends AnyFunSuite with Matchers with BeforeAndAfterAll {
   }
 
   test("save delta log") {
+    val hdp = SparkSession.active.sparkContext.hadoopConfiguration
     val pathFilter = new FileFilter {
       override def accept(pathname: File): Boolean = {
         !pathname.getName.startsWith(".") && pathname.getName.endsWith(".json")
@@ -73,53 +74,46 @@ class GuidewireTest extends AnyFunSuite with Matchers with BeforeAndAfterAll {
     }
     val tempDir = Files.createTempDirectory("delta_log")
     val deltaFileName = "foo" + File.separator + "_delta_log"
-    val batchesInit = Map(
-      "foo" -> List(
-        GwBatch(0L, Array.empty[GwFile]),
-        GwBatch(1L, Array.empty[GwFile], version = 1),
-        GwBatch(2L, Array.empty[GwFile], version = 2),
-      )
+    val batchesInit = List(
+      GwBatch(0L, schemaId = "123", filesToAdd = Array.empty[GwFile]),
+      GwBatch(1L, schemaId = "123", filesToAdd = Array.empty[GwFile], version = 1),
+      GwBatch(2L, schemaId = "123", filesToAdd = Array.empty[GwFile], version = 2),
     )
-    Guidewire.saveDeltaLog(batchesInit, tempDir.toString, SaveMode.Overwrite)
+    Guidewire.saveDeltaLogOverwrite(hdp, "foo", batchesInit, tempDir.toString)
     val filesInit = new File(tempDir.toFile, deltaFileName).listFiles(pathFilter)
     filesInit.length must be(3)
 
-    val batchesOverwrite = Map(
-      "foo" -> List(
-        GwBatch(0L, Array.empty[GwFile]),
-        GwBatch(1L, Array.empty[GwFile], version = 1),
-      )
+    val batchesOverwrite = List(
+      GwBatch(0L, schemaId = "123", filesToAdd = Array.empty[GwFile]),
+      GwBatch(1L, schemaId = "123", filesToAdd = Array.empty[GwFile], version = 1),
     )
-    Guidewire.saveDeltaLog(batchesOverwrite, tempDir.toString, SaveMode.Overwrite)
+    Guidewire.saveDeltaLogOverwrite(hdp, "foo", batchesOverwrite, tempDir.toString)
     val filesOverwrite = new File(tempDir.toFile, deltaFileName).listFiles(pathFilter)
     filesOverwrite.length must be(2)
 
-    val batchesAppend = Map(
-      "foo" -> List(
-        GwBatch(0L, Array.empty[GwFile]),
-        GwBatch(1L, Array.empty[GwFile], version = 1),
-        GwBatch(2L, Array.empty[GwFile], version = 2),
-      )
+    val batchesAppend = List(
+      GwBatch(0L, schemaId = "123", filesToAdd = Array.empty[GwFile]),
+      GwBatch(1L, schemaId = "123", filesToAdd = Array.empty[GwFile], version = 1),
+      GwBatch(2L, schemaId = "123", filesToAdd = Array.empty[GwFile], version = 2),
     )
-    Guidewire.saveDeltaLog(batchesAppend, tempDir.toString, SaveMode.Append)
+    Guidewire.saveDeltaLogAppend(hdp, "foo", batchesAppend, tempDir.toString)
     val filesAppend = new File(tempDir.toFile, deltaFileName).listFiles(pathFilter)
     filesAppend.foreach(println)
     filesAppend.length must be(5)
   }
 
   test("read delta log through spark") {
+    val hdp = SparkSession.active.sparkContext.hadoopConfiguration
     val schema0 = StructType(Seq(StructField("foo", StringType, nullable = true)))
     val schema1 = StructType(Seq(StructField("foo", StringType, nullable = true), StructField("bar", StringType, nullable = true)))
     val schema2 = StructType(Seq(StructField("foo", StringType, nullable = true), StructField("bar", StringType, nullable = true), StructField("helloWorld", IntegerType, nullable = true)))
-    val batchesAppend = Map(
-      "foo" -> List(
-        GwBatch(0L, Array.empty[GwFile], schema = Some(GwSchema(schema0.json, 0L))),
-        GwBatch(1L, Array.empty[GwFile], version = 1, schema = Some(GwSchema(schema1.json, 1L))),
-        GwBatch(2L, Array.empty[GwFile], version = 2, schema = Some(GwSchema(schema2.json, 2L))),
-      )
+    val batchesAppend = List(
+      GwBatch(0L, schemaId = "123", filesToAdd = Array.empty[GwFile], schema = Some(GwSchema(schema0.json, 0L))),
+      GwBatch(1L, schemaId = "123", filesToAdd = Array.empty[GwFile], version = 1, schema = Some(GwSchema(schema1.json, 1L))),
+      GwBatch(2L, schemaId = "123", filesToAdd = Array.empty[GwFile], version = 2, schema = Some(GwSchema(schema2.json, 2L))),
     )
     val tempDir = Files.createTempDirectory("delta_log_spark")
-    Guidewire.saveDeltaLog(batchesAppend, tempDir.toString, SaveMode.Overwrite)
+    Guidewire.saveDeltaLogOverwrite(hdp, "foo", batchesAppend, tempDir.toString)
 
     SparkSession.active
       .read

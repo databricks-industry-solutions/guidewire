@@ -21,6 +21,12 @@ package object guidewire {
     }
   }
 
+  case class BatchResult(
+                          schemaId: String,
+                          commitTimestamp: Long,
+                          numFiles: Int
+                        )
+
   case class GwFile(
                      path: String,
                      size: Long,
@@ -100,6 +106,7 @@ package object guidewire {
                       txnId: String = UUID.randomUUID().toString,
                       schema: Option[GwSchema] = None,
                       version: Int = 0,
+                      schemaId: String = "",
                     ) {
 
     def toJson: String = {

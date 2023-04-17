@@ -79,6 +79,7 @@ class EntityTest extends AnyFunSuite with Matchers {
 
     GwBatch(
       timestamp = 1234567892,
+      schemaId = "123",
       txnId = "0002b396-4334-4f06-8f6b-69ab6a65851a",
       filesToAdd = listAdd,
       schema = Some(schema)
@@ -91,6 +92,7 @@ class EntityTest extends AnyFunSuite with Matchers {
     GwBatch(
       version = 1,
       timestamp = 1234567892,
+      schemaId = "123",
       txnId = "0002b396-4334-4f06-8f6b-69ab6a65851a",
       filesToAdd = listAdd,
       schema = Some(schema)
@@ -102,6 +104,7 @@ class EntityTest extends AnyFunSuite with Matchers {
     GwBatch(
       version = 2,
       timestamp = 1234567892,
+      schemaId = "123",
       txnId = "0002b396-4334-4f06-8f6b-69ab6a65851a",
       filesToAdd = Array.empty,
       schema = Some(schema)

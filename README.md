@@ -5,16 +5,33 @@
 [![POC](https://img.shields.io/badge/POC-1_day-green?style=for-the-badge)](https://databricks.com/try-databricks)
 
 **Interpreting guidewire CDA as delta table:** 
-*Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna 
-aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. 
-Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint 
-occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.*
-
-<img src="images/approach.png" width=1000>
+*As a technology company, [Guidewire](https://www.guidewire.com/) offers an industry platform for property and casualty 
+insurance carriers worldwide. Through different products and services under their insurance suite, they provide users
+with the operation capabilities required to acquire, process and settle claims, maintains policies, support underwriting
+and adjustment processes. Databricks on the other hand provides users with analytical capabilities (from basic 
+reporting to complex ML solutions) through their
+[lakehouse for Insurance](https://www.databricks.com/solutions/industries/financial-services). By combining both
+platforms together, P&C insurance companies have now the ability to start integrating advanced analytics capabilities
+(AI/ML) into their core business processes, enriching customer information with alternative data (e.g. weather data) 
+but equally reconciling and reporting critical information at enterprise scale.*
 
 ___
 
 ## Approach
+
+Guidewire supports data access to analytical environment via their Cloud Data Access offering 
+([CDA](https://developer.guidewire.com/introducing-guidewire-data-platform/)). Storing files as individual parquet files
+under different timestamps and schema evolution is unfortunately making processing difficult for end users. Instead
+of processing files individually, why wouldn't we generate the `delta log` manifest files to only read information
+we need, when we need it without having to download, process and reconcile complex information. This is the principle
+behind this initiative.
+
+<img src="images/approach.png" width=1000>
+
+More specifically, we will process all Guidewire tables independently, in parallel (i.e. as a spark job), where each
+task will consist in only listing parquet files and folders and generating delta log accordingly. From an end user 
+standpoint, guidewire will look as Delta and can be processed as such, reducing processing time from days to seconds 
+(since we do not have to download and process each file through many spark jobs).
 
 <img src="images/reconcile.png" width=1000>
 
@@ -27,7 +44,7 @@ val databasePath = "/path/to/delta/database"
 Guidewire.index(manifestUri, databasePath)
 ```
 
-This command will run on a data increment by default, loading our previous checkpoints stored under 
+This command will run on a data increment by default, loading our previous checkpoints stored as a delta table under 
 `${databasePath}/_checkpoints`. Should you need to reindex the whole of guidewire data, please provide optional 
 `savemode` parameter as follows
 
@@ -36,7 +53,8 @@ import org.apache.spark.sql.SaveMode
 Guidewire.index(manifestUri, databasePath, saveMode = SaveMode.Overwrite)
 ```
 
-Guidewire files will not be stored but referenced from a delta location that can be defined as an external table
+Following a 'shallow clone' pattern, Guidewire files will not be stored but referenced from a delta location that 
+can be defined as an external table. 
 
 ```roomsql
 CREATE DATABASE IF NOT EXISTS guidewire;
@@ -65,12 +83,3 @@ accordingly.
 ## Authors
 
 <antoine.amend@databricks.com>
-
-
-
-
-
-### TODO
-
-- Check delta standalone and file issue (absolute path)
-- 

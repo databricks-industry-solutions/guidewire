@@ -22,14 +22,14 @@ class GuidewireUtilsTest extends AnyFunSuite with Matchers {
     val newSchema = Some(GwSchema("{\"foo\":\"bar\"}", System.currentTimeMillis()))
 
     val batches = List(
-      GwBatch(1L, version = 1, filesToAdd = Array(GwFile("foo1", 1, 1), GwFile("bar1", 1, 1))),
-      GwBatch(2L, version = 2, filesToAdd = Array(GwFile("foo2", 2, 2), GwFile("bar2", 2, 2))),
+      GwBatch(1L, schemaId = "123", version = 1, filesToAdd = Array(GwFile("foo1", 1, 1), GwFile("bar1", 1, 1))),
+      GwBatch(2L, schemaId = "123", version = 2, filesToAdd = Array(GwFile("foo2", 2, 2), GwFile("bar2", 2, 2))),
       // At batch 3, we change schema. All files prior to batch 3 must be unregistered
-      GwBatch(3L, version = 3, filesToAdd = Array(GwFile("foo3", 3, 3), GwFile("bar3", 3, 3)), schema = newSchema),
-      GwBatch(4L, version = 4, filesToAdd = Array(GwFile("foo4", 4, 4), GwFile("bar4", 4, 4))),
-      GwBatch(5L, version = 5, filesToAdd = Array(GwFile("foo5", 5, 5), GwFile("bar5", 5, 5))),
+      GwBatch(3L, schemaId = "123", version = 3, filesToAdd = Array(GwFile("foo3", 3, 3), GwFile("bar3", 3, 3)), schema = newSchema),
+      GwBatch(4L, schemaId = "123", version = 4, filesToAdd = Array(GwFile("foo4", 4, 4), GwFile("bar4", 4, 4))),
+      GwBatch(5L, schemaId = "123", version = 5, filesToAdd = Array(GwFile("foo5", 5, 5), GwFile("bar5", 5, 5))),
       // At batch 6, we change schema. All files prior to batch 6 and after batch 3 must be unregistered
-      GwBatch(6L, version = 6, filesToAdd = Array(GwFile("foo6", 6, 6), GwFile("bar6", 6, 6)), schema = newSchema),
+      GwBatch(6L, schemaId = "123", version = 6, filesToAdd = Array(GwFile("foo6", 6, 6), GwFile("bar6", 6, 6)), schema = newSchema),
     )
 
     GuidewireUtils.unregisterFilesPropagation(batches).foreach(gw => {
