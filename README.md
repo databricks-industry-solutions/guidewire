@@ -36,6 +36,19 @@ standpoint, guidewire will look as a Delta table and be processed as such, reduc
 
 <img src="images/reconcile.png" width=1000>
 
+As the data is now on Delta lake (physically materialized or not), one can benefit from all the downstream 
+capabilities of delta lake, "subscribing" to changes via 
+[auto-loader](https://docs.databricks.com/ingestion/auto-loader/index.html) capabilities, delta live table
+([DLT](https://www.databricks.com/product/delta-live-tables)) or even 
+[delta sharing](https://www.databricks.com/product/delta-sharing), accelerating time to insights from days to minutes.
+
+## A word of caution
+
+As this model follows a shallow clone approach, it is recommended to only grant read permission to end user since a 
+`VACCUM` operation on the generated delta would possibly result in delta loss on the guidewire S3 bucket. We highly
+recommend organization not exposing this raw dataset to end users but rather create a SILVER version with materialized
+data for consumption.
+
 ## Usage
 
 ```scala
@@ -78,8 +91,6 @@ mvn clean package -Pshaded
 Following maven standard, add profile `shaded` to generate a standalone jar file with all dependencies included. 
 This jar can be installed on a databricks [environment](https://docs.databricks.com/libraries/workspace-libraries.html) 
 accordingly.
-
-<img src="https://docs.databricks.com/_images/select-library-aws.png" width="300">
 
 ## Authors
 
