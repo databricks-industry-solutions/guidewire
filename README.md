@@ -45,9 +45,10 @@ capabilities of delta lake, "subscribing" to changes via
 ## A word of caution
 
 As this model follows a shallow clone approach, it is recommended to only grant read permission to end user since a 
-`VACCUM` operation on the generated delta would possibly result in delta loss on the guidewire S3 bucket. We highly
+`VACCUM` operation on the generated delta would possibly result in data loss on the guidewire S3 bucket. We highly
 recommend organization not exposing this raw dataset to end users but rather create a SILVER version with materialized
-data for consumption.
+data for consumption. Note that an `OPTIMIZE` command will result in materialization of latest delta snapshot with optimized
+parquet files. Only the relevant files will be physically downloaded from original S3 to destination table.
 
 ## Usage
 
