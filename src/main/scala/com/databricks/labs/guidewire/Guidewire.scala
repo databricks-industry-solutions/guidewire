@@ -2,7 +2,7 @@ package com.databricks.labs.guidewire
 
 import com.amazonaws.services.s3.AmazonS3URI
 import io.delta.standalone.actions.{Action, Metadata}
-import io.delta.standalone.{DeltaLog, Operation}
+import io.delta.standalone.{DeltaLog, Operation, OptimisticTransaction}
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.sql.{SaveMode, SparkSession, functions}
@@ -92,6 +92,9 @@ object Guidewire extends Serializable {
 
       // Deserialize hadoop configuration
       val hadoopConfiguration = hadoopConfigurationB.value.value
+
+      // Acting as a shallow clone, we do not want framework to relativize paths
+      hadoopConfiguration.set(OptimisticTransaction.RELATIVE_PATH_IGNORE, "true")
 
       // Retrieve last checkpoints
       val lastProcessedTimestamp = checkpointsB.value.getOrElse(tableName, -1L)

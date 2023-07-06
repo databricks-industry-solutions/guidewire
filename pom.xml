@@ -78,10 +78,17 @@
             <version>${spark.version}</version>
             <scope>provided</scope>
         </dependency>
+<!--        <dependency>-->
+<!--            <groupId>io.delta</groupId>-->
+<!--            <artifactId>delta-standalone_${scala.binary.version}</artifactId>-->
+<!--            <version>${delta.standalone.version}</version>-->
+<!--        </dependency>-->
         <dependency>
             <groupId>io.delta</groupId>
-            <artifactId>delta-standalone_${scala.binary.version}</artifactId>
+            <artifactId>delta-standalone-custom</artifactId>
             <version>${delta.standalone.version}</version>
+            <scope>system</scope>
+            <systemPath>/Users/antoine.amend/Workspace/delta/connectors/standaloneCosmetic/target/scala-2.12/delta-standalone-assembly-0.6.1-SNAPSHOT.jar</systemPath>
         </dependency>
         <dependency>
             <groupId>org.apache.parquet</groupId>
