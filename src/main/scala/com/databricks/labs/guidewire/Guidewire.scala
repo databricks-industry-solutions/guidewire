@@ -2,7 +2,7 @@ package com.databricks.labs.guidewire
 
 import com.amazonaws.services.s3.AmazonS3URI
 import io.delta.standalone.actions.{Action, Metadata}
-import io.delta.standalone.{DeltaLog, Operation, OptimisticTransaction}
+import io.delta.standalone.{DeltaLog, Operation}
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.sql.{SaveMode, SparkSession, functions}
@@ -17,6 +17,7 @@ object Guidewire extends Serializable {
   val logger: Logger = LoggerFactory.getLogger(this.getClass)
   val checkpointsTable = "_checkpoints"
   val deltaManifest = "_delta_log"
+  val configDeltaAbsolutePath = "io.delta.vacuum.relativize.ignoreError"
 
   /**
    * Entry point for guidewire connector
@@ -94,7 +95,7 @@ object Guidewire extends Serializable {
       val hadoopConfiguration = hadoopConfigurationB.value.value
 
       // Acting as a shallow clone, we do not want framework to relativize paths
-      hadoopConfiguration.set(OptimisticTransaction.RELATIVE_PATH_IGNORE, "true")
+      hadoopConfiguration.setBoolean(configDeltaAbsolutePath, true)
 
       // Retrieve last checkpoints
       val lastProcessedTimestamp = checkpointsB.value.getOrElse(tableName, -1L)

@@ -65,9 +65,3 @@ accordingly.
 ## Authors
 
 <antoine.amend@databricks.com>
-
-
-### TODO
-
-- Check delta standalone and file issue (absolute path)
-- 

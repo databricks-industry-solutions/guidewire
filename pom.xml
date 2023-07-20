@@ -43,7 +43,7 @@
         <scala.binary.version>2.12</scala.binary.version>
         <spark.version>3.3.2</spark.version>
         <delta.version>2.2.0</delta.version>
-        <delta.standalone.version>0.6.0</delta.standalone.version>
+        <delta.standalone.version>3.0.0rc1</delta.standalone.version>
         <java.version>1.8</java.version>
     </properties>
 
@@ -78,17 +78,10 @@
             <version>${spark.version}</version>
             <scope>provided</scope>
         </dependency>
-<!--        <dependency>-->
-<!--            <groupId>io.delta</groupId>-->
-<!--            <artifactId>delta-standalone_${scala.binary.version}</artifactId>-->
-<!--            <version>${delta.standalone.version}</version>-->
-<!--        </dependency>-->
         <dependency>
             <groupId>io.delta</groupId>
-            <artifactId>delta-standalone-custom</artifactId>
+            <artifactId>delta-standalone_${scala.binary.version}</artifactId>
             <version>${delta.standalone.version}</version>
-            <scope>system</scope>
-            <systemPath>/Users/antoine.amend/Workspace/delta/connectors/standaloneCosmetic/target/scala-2.12/delta-standalone-assembly-0.6.1-SNAPSHOT.jar</systemPath>
         </dependency>
         <dependency>
             <groupId>org.apache.parquet</groupId>
@@ -105,11 +98,6 @@
             <groupId>com.amazonaws</groupId>
             <artifactId>aws-java-sdk-s3</artifactId>
             <version>1.12.261</version>
-        </dependency>
-        <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-java-sdk-bundle</artifactId>
-            <version>1.12.180</version>
         </dependency>
         <dependency>
             <groupId>org.apache.hadoop</groupId>
