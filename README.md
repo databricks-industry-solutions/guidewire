@@ -1,8 +1,8 @@
 <img src=https://d1r5llqwmkrl74.cloudfront.net/notebooks/fsi/fs-lakehouse-logo-transparent.png width="600px">
 
-[![DBR](https://img.shields.io/badge/DBR-12.2ML-red?logo=databricks&style=for-the-badge)](https://docs.databricks.com/release-notes/runtime/12.2.html)
-[![CLOUD](https://img.shields.io/badge/CLOUD-AWS-blue?logo=googlecloud&style=for-the-badge)](https://databricks.com/try-databricks)
-[![POC](https://img.shields.io/badge/POC-1_day-green?style=for-the-badge)](https://databricks.com/try-databricks)
+[![DBR](https://img.shields.io/badge/DBR-12.2_LTS-red?logo=databricks&style=for-the-badge)](https://docs.databricks.com/release-notes/runtime/12.2.html)
+[![CLOUD](https://img.shields.io/badge/CLOUD-AWS-orange?style=for-the-badge)](https://databricks.com/try-databricks)
+[![POC](https://img.shields.io/badge/POC-3_days-green?style=for-the-badge)](https://databricks.com/try-databricks)
 
 **Interpreting guidewire CDA as delta table:** 
 *As a technology company, [Guidewire](https://www.guidewire.com/) offers an industry platform for property and casualty 
@@ -71,14 +71,14 @@ Guidewire.index(manifestUri, databasePath, saveMode = SaveMode.Overwrite)
 Following a 'shallow clone' pattern, Guidewire files will not be stored but referenced from a delta location that 
 can be defined as an external table. 
 
-```roomsql
+```sql
 CREATE DATABASE IF NOT EXISTS guidewire;
 CREATE EXTERNAL TABLE IF NOT EXISTS guidewire.policy_holders LOCATION '/path/to/delta/database/policy_holders';
 ```
 
 Finally, we can query guidewire data and access all its different versions at different timestamps.
 
-```roomsql
+```sql
 SELECT * FROM guidewire.policy_holders
 VERSION AS OF 2
 ```
