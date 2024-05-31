@@ -14,6 +14,7 @@ object ParquetUtils {
       case STRING => SchemaType(new StringType(), nullable = false)
       case BOOLEAN => SchemaType(new BooleanType(), nullable = false)
       case BYTES => SchemaType(new BinaryType(), nullable = false)
+      case FIXED => SchemaType(new BinaryType(), nullable = false)
       case DOUBLE => SchemaType(new DoubleType(), nullable = false)
       case FLOAT => SchemaType(new FloatType(), nullable = false)
       case ENUM => SchemaType(new StringType(), nullable = false)

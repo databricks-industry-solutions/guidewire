@@ -15,9 +15,8 @@ import scala.collection.JavaConverters._
 object Guidewire extends Serializable {
 
   val logger: Logger = LoggerFactory.getLogger(this.getClass)
-  val checkpointsTable = "_checkpoints"
-  val deltaManifest = "_delta_log"
-  val configDeltaAbsolutePath = "io.delta.vacuum.relativize.ignoreError"
+  private val checkpointsTable = "_checkpoints"
+  private val configDeltaAbsolutePath = "io.delta.vacuum.relativize.ignoreError"
 
   /**
    * Entry point for guidewire connector
@@ -99,6 +98,7 @@ object Guidewire extends Serializable {
 
       // Retrieve last checkpoints
       val lastProcessedTimestamp = checkpointsB.value.getOrElse(tableName, -1L)
+      val lastSuccessfulWriteTimestamp = manifestEntry.lastSuccessfulWriteTimestamp.toLong
 
       // Ensure task serialization - this happens at executor level
       val s3 = S3Access.build
@@ -106,45 +106,48 @@ object Guidewire extends Serializable {
       // Process each schema directory, starting from eldest to most recent
       val dataFilesUri = new AmazonS3URI(manifestEntry.getDataFilesPath)
       val schemaHistory = manifestEntry.schemaHistory.toList.sortBy(_._2.toLong).zipWithIndex
-      val batches = schemaHistory.flatMap({ case ((schemaId, lastUpdatedTs), i) =>
+      val batches = schemaHistory.flatMap({ case ((schemaId, _), i) =>
 
-        // For each schema directory, find associated timestamp folders to process
-        val schemaDirectory = s"${dataFilesUri.getKey}/$schemaId/"
-        val schemaTimestamps = s3.listTimestampDirectories(dataFilesUri.getBucket, schemaDirectory)
+          // For each schema directory, find associated timestamp folders to process
+          val schemaDirectory = s"${dataFilesUri.getKey}/$schemaId/"
+          val schemaTimestamps = s3.listTimestampDirectories(dataFilesUri.getBucket, schemaDirectory)
 
-        // We only want to process recent information (since last checkpoint or 0 if overwrite)
-        // Equally, we want to ensure folder was entirely committed and therefore defined in manifest
-        val schemaCommittedTimestamps = schemaTimestamps
-          .sorted
-          .zipWithIndex
-          .filter(_._1 <= lastUpdatedTs.toLong) // Ensure directory we find was committed to manifest
-          .filter(_._1 > lastProcessedTimestamp) // Ensure directory was not yet processed
+          // We only want to process recent information (since last checkpoint or 0 if overwrite)
+          // Equally, we want to ensure folder was entirely committed and therefore defined in manifest
+          val schemaCommittedTimestamps = schemaTimestamps
+            .sorted
+            .zipWithIndex
+            .filter(_._1 <= lastSuccessfulWriteTimestamp) // Ensure directory we find was committed to manifest
+            .filter(_._1 > lastProcessedTimestamp) // Ensure directory was not yet processed
 
-        // Get files for each timestamp folder
-        schemaCommittedTimestamps.map({ case (committedTimestamp, j) =>
+          // Get files for each timestamp folder
+          schemaCommittedTimestamps.map({ case (committedTimestamp, j) =>
 
-          // List all parquet files
-          val timestampDirectory = s"${dataFilesUri.getKey}/$schemaId/$committedTimestamp/"
-          val timestampFiles = s3.listParquetFiles(dataFilesUri.getBucket, timestampDirectory)
+            // List all parquet files
+            val timestampDirectory = s"${dataFilesUri.getKey}/$schemaId/$committedTimestamp/"
+            val timestampFiles = s3.listParquetFiles(dataFilesUri.getBucket, timestampDirectory)
 
-          // For the first committed timestamp folder in a given schema, extract schema from a sample parquet file
-          // This assumes schema consistency within guidewire (same schema over different subfolder timestamps)
-          val metadata = if (j == 0) {
-            // For convenience, let's read the smallest file available that we will read in memory
-            val sampleFile = timestampFiles.minBy(_.getSize)
-            // And return associated spark schema, serialized as json as per delta requirement
-            val fileKey = new AmazonS3URI(sampleFile.getPath).getKey
-            val sampleSchema = GuidewireUtils.readSchema(s3.readByteArray(dataFilesUri.getBucket, fileKey))
-            Some(Metadata.builder().schema(sampleSchema).build())
-          } else {
-            // This is not the first committed folder, no need to define schema
-            None: Option[Metadata]
-          }
+            // For the first committed timestamp folder in a given schema, extract schema from a sample parquet file
+            // This assumes schema consistency within guidewire (same schema over different subfolder timestamps)
+            val metadata = if (j == 0) {
+              // For convenience, let's read the smallest file available that we will read in memory
+              val sampleFile = timestampFiles.minBy(_.getSize)
+              // And return associated spark schema, serialized as json as per delta requirement
+              val fileKey = new AmazonS3URI(sampleFile.getPath).getKey
+              val sampleSchema = GuidewireUtils.readSchema(s3.readByteArray(dataFilesUri.getBucket, fileKey))
+              sampleSchema.map(structType => {
+                Metadata.builder().schema(structType).build()
+              })
+            } else {
+              // This is not the first committed folder, no need to define schema
+              None: Option[Metadata]
+            }
 
-          // Wrap all commit information into a case class and keep track of the order that was processed
-          (Batch(schemaId, committedTimestamp, timestampFiles, metadata), (i, j))
+            // Wrap all commit information into a case class and keep track of the order that was processed
+            (Batch(schemaId, committedTimestamp, timestampFiles, metadata), (i, j))
+          })
         })
-      })
+        .filter(_._1.metadata.isDefined)
         // Sort all batches (schema first, then timestamp)
         .sortBy({ case (_, (schemaId, commitId)) => (schemaId, commitId) })
         .map(_._1)
