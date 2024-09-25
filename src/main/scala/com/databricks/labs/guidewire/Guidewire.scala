@@ -71,12 +71,14 @@ object Guidewire extends Serializable {
     manifestRdd.cache() // materialize partitioning
     manifestRdd.count()
 
+    // User may have set system properties for proxy
+    // Let's carried those across executors
+    val systemPropertiesB = SparkSession.active.sparkContext.broadcast(System.getProperties)
+
     // Serialize some configuration to be used at executor level
     val hadoopConfiguration = SparkSession.active.sparkContext.hadoopConfiguration
     val hadoopConfigurationS = new SerializableConfiguration(hadoopConfiguration)
     val hadoopConfigurationB = SparkSession.active.sparkContext.broadcast(hadoopConfigurationS)
-    SparkSession.active.sparkContext.hadoopConfiguration
-
 
     val databasePathB = SparkSession.active.sparkContext.broadcast(databasePath)
     val checkpointsB = if (checkpoints.nonEmpty) {
@@ -92,6 +94,10 @@ object Guidewire extends Serializable {
 
       // Deserialize hadoop configuration
       val hadoopConfiguration = hadoopConfigurationB.value.value
+
+      // Deserialize System properties
+      val systemProperties = systemPropertiesB.value
+      System.setProperties(systemProperties)
 
       // Acting as a shallow clone, we do not want framework to relativize paths
       hadoopConfiguration.setBoolean(configDeltaAbsolutePath, true)
