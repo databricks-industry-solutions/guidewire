@@ -72,7 +72,7 @@ object Guidewire extends Serializable {
     manifestRdd.count()
 
     // User may have set system properties for proxy
-    // Let's carried those across executors
+    // Let's carry those across executors
     val systemPropertiesB = SparkSession.active.sparkContext.broadcast(System.getProperties)
 
     // Serialize some configuration to be used at executor level
