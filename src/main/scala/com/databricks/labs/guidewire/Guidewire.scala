@@ -28,7 +28,8 @@ object Guidewire extends Serializable {
   def index(
              manifestS3Uri: String,
              databasePath: String,
-             saveMode: SaveMode = SaveMode.Append
+             saveMode: SaveMode = SaveMode.Append,
+             enforceGuidewireTimestamp: Boolean = true
            ): Unit = {
 
     // If Overwrite, we do not care about checkpoints as we will be reindexing the whole table
@@ -44,7 +45,7 @@ object Guidewire extends Serializable {
     val manifest = Guidewire.readManifest(manifestS3Uri)
 
     // Given the list of available files (manifest) and optional checkpoints, we process each table in parallel
-    val batches = Guidewire.processManifest(manifest, checkpoints, databasePath)
+    val batches = Guidewire.processManifest(manifest, checkpoints, databasePath, enforceGuidewireTimestamp)
 
     // Upon success, we save new checkpoints for future index
     Guidewire.saveCheckpoints(batches, databasePath, saveMode)
@@ -62,7 +63,8 @@ object Guidewire extends Serializable {
   private[guidewire] def processManifest(
                                           manifest: Map[String, ManifestEntry],
                                           checkpoints: Map[String, Long] = Map.empty[String, Long],
-                                          databasePath: String
+                                          databasePath: String,
+                                          enforceGuidewireTimestamp: Boolean = true
                                         ): Map[String, List[BatchResult]] = {
 
     logger.info(s"Distributing ${manifest.size} table(s) against multiple executor(s)")
@@ -74,6 +76,7 @@ object Guidewire extends Serializable {
     // User may have set system properties for proxy
     // Let's carried those across executors
     val systemPropertiesB = SparkSession.active.sparkContext.broadcast(System.getProperties)
+    val enforceGuidewireTimestampB = SparkSession.active.sparkContext.broadcast(enforceGuidewireTimestamp)
 
     // Serialize some configuration to be used at executor level
     val hadoopConfiguration = SparkSession.active.sparkContext.hadoopConfiguration
@@ -104,7 +107,11 @@ object Guidewire extends Serializable {
 
       // Retrieve last checkpoints
       val lastProcessedTimestamp = checkpointsB.value.getOrElse(tableName, -1L)
-      val lastSuccessfulWriteTimestamp = manifestEntry.lastSuccessfulWriteTimestamp.toLong
+      val lastSuccessfulWriteTimestamp = if (enforceGuidewireTimestampB.value) {
+        manifestEntry.lastSuccessfulWriteTimestamp.toLong
+      } else {
+        Long.MaxValue
+      }
 
       // Ensure task serialization - this happens at executor level
       val s3 = S3Access.build
