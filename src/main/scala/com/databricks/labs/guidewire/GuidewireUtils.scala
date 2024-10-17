@@ -1,5 +1,7 @@
 package com.databricks.labs.guidewire
 
+import com.amazonaws.services.s3.AmazonS3URI
+import io.delta.standalone.actions.{AddFile, Metadata}
 import io.delta.standalone.types.StructType
 import org.apache.avro.Schema
 import org.apache.avro.generic.GenericRecord
@@ -12,6 +14,7 @@ import org.slf4j.{Logger, LoggerFactory}
 
 import java.io.InputStream
 import java.nio.charset.StandardCharsets
+import scala.annotation.tailrec
 
 object GuidewireUtils {
 
@@ -27,7 +30,25 @@ object GuidewireUtils {
     read[Map[String, ManifestEntry]](manifestJson)
   }
 
-  def readSchema(content: Array[Byte]): Option[StructType] = {
+  @tailrec
+  def readSchemaFromFiles(s3: S3Access, bucket: String, files: Array[AddFile]): Option[Metadata] = {
+    if (files.isEmpty) {
+      logger.error("Could not find any non empty file to read schema from")
+      None: Option[Metadata]
+    } else {
+      val sampleFile = files.head
+      val fileKey = new AmazonS3URI(sampleFile.getPath).getKey
+      val sampleSchema = GuidewireUtils.readSchema(s3.readByteArray(bucket, fileKey))
+      if (sampleSchema.isDefined) {
+        Some(Metadata.builder().schema(sampleSchema.get).build())
+      } else {
+        logger.warn("Could not derive schema from file [{}]", fileKey)
+        readSchemaFromFiles(s3, bucket, files.tail)
+      }
+    }
+  }
+
+  private def readSchema(content: Array[Byte]): Option[StructType] = {
     val parquetFile = new ParquetStream(content)
     val parquetReader: ParquetReader[GenericRecord] = AvroParquetReader.builder[GenericRecord](parquetFile).build
     val record: GenericRecord = parquetReader.read

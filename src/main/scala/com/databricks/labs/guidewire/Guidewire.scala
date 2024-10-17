@@ -107,6 +107,10 @@ object Guidewire extends Serializable {
 
       // Retrieve last checkpoints
       val lastProcessedTimestamp = checkpointsB.value.getOrElse(tableName, -1L)
+
+      // EDGE CASE#1: Sometimes Guidewire does not seem to enforce last updated timestamp in manifest
+      // This results in folders being skipped. We might want to relax this constraint on an exception basis by
+      // providing framework with an optional parameter
       val lastSuccessfulWriteTimestamp = if (enforceGuidewireTimestampB.value) {
         manifestEntry.lastSuccessfulWriteTimestamp.toLong
       } else {
@@ -138,32 +142,43 @@ object Guidewire extends Serializable {
 
             // List all parquet files
             val timestampDirectory = s"${dataFilesUri.getKey}/$schemaId/$committedTimestamp/"
-            val timestampFiles = s3.listParquetFiles(dataFilesUri.getBucket, timestampDirectory)
+            val timestampFiles = s3.listParquetFiles(dataFilesUri.getBucket, timestampDirectory).filter(_.getSize > 0L)
 
-            // For the first committed timestamp folder in a given schema, extract schema from a sample parquet file
-            // This assumes schema consistency within guidewire (same schema over different subfolder timestamps)
-            val metadata = if (j == 0) {
-              // For convenience, let's read the smallest file available that we will read in memory
-              val sampleFile = timestampFiles.minBy(_.getSize)
-              // And return associated spark schema, serialized as json as per delta requirement
-              val fileKey = new AmazonS3URI(sampleFile.getPath).getKey
-              val sampleSchema = GuidewireUtils.readSchema(s3.readByteArray(dataFilesUri.getBucket, fileKey))
-              sampleSchema.map(structType => {
-                Metadata.builder().schema(structType).build()
-              })
+            // Building a new batch of files resulting in a new delta version
+            val batch = if (timestampFiles.length == 0) {
+              logger.error("Could not find any file in directory [{}]", timestampDirectory)
+              None: Option[Batch]
             } else {
-              // This is not the first committed folder, no need to define schema
-              None: Option[Metadata]
+
+              // For the first committed timestamp folder in a given schema, extract schema from a sample parquet file
+              // This assumes schema consistency within guidewire (same schema over different subfolder timestamps)
+              val metadata = if (j == 0) {
+
+                // For convenience, let's read the smallest file available
+                // EDGE CASE#2: Unfortunately, some files are either empty or non null but without any record
+                // We'll recursively read files from smallest to largest until schema can be derived
+                logger.debug("Reading schema for [{}] (new fingerprint)", timestampDirectory)
+                val sampleFiles = timestampFiles.sortBy(_.getSize)
+                GuidewireUtils.readSchemaFromFiles(s3, dataFilesUri.getBucket, sampleFiles)
+              } else {
+                // This is not the first committed folder, no need to define schema
+                logger.debug("Skipping schema for [{}] (same fingerprint)", timestampDirectory)
+                None: Option[Metadata]
+              }
+
+              // Wrap all commit information into a case class and keep track of the order that was processed
+              Some(Batch(schemaId, committedTimestamp, timestampFiles, metadata))
             }
 
-            // Wrap all commit information into a case class and keep track of the order that was processed
-            (Batch(schemaId, committedTimestamp, timestampFiles, metadata), (i, j))
+            (batch, (i, j))
           })
         })
-        .filter(_._1.metadata.isDefined)
+        // Ensure we had files to constitute a batch
+        .filter(_._1.isDefined)
         // Sort all batches (schema first, then timestamp)
         .sortBy({ case (_, (schemaId, commitId)) => (schemaId, commitId) })
-        .map(_._1)
+        // Get individual batch
+        .map(_._1.get)
 
       if (lastProcessedTimestamp > 0) {
         // We have checkpoints, this is an append function
