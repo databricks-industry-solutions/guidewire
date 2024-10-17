@@ -107,6 +107,10 @@ object Guidewire extends Serializable {
 
       // Retrieve last checkpoints
       val lastProcessedTimestamp = checkpointsB.value.getOrElse(tableName, -1L)
+
+      // EDGE CASE#1: Sometimes Guidewire does not seem to enforce last updated timestamp in manifest
+      // This results in folders being skipped. We might want to relax this constraint on an exception basis by
+      // providing framework with an optional parameter
       val lastSuccessfulWriteTimestamp = if (enforceGuidewireTimestampB.value) {
         manifestEntry.lastSuccessfulWriteTimestamp.toLong
       } else {
@@ -150,16 +154,12 @@ object Guidewire extends Serializable {
               // This assumes schema consistency within guidewire (same schema over different subfolder timestamps)
               val metadata = if (j == 0) {
 
-                // For convenience, let's read the smallest file available that we will read in memory
+                // For convenience, let's read the smallest file available
+                // EDGE CASE#2: Unfortunately, some files are either empty or non null but without any record
+                // We'll recursively read files from smallest to largest until schema can be derived
                 logger.debug("Reading schema for [{}] (new fingerprint)", timestampDirectory)
-                val sampleFile = timestampFiles.minBy(_.getSize)
-
-                // Return associated spark schema, serialized as json as per delta requirement
-                val fileKey = new AmazonS3URI(sampleFile.getPath).getKey
-                val sampleSchema = GuidewireUtils.readSchema(s3.readByteArray(dataFilesUri.getBucket, fileKey))
-                sampleSchema.map(structType => {
-                  Metadata.builder().schema(structType).build()
-                })
+                val sampleFiles = timestampFiles.sortBy(_.getSize)
+                GuidewireUtils.readSchemaFromFiles(s3, dataFilesUri.getBucket, sampleFiles)
               } else {
                 // This is not the first committed folder, no need to define schema
                 logger.debug("Skipping schema for [{}] (same fingerprint)", timestampDirectory)
