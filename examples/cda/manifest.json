@@ -2,7 +2,7 @@
   "policy_holders": {
     "lastSuccessfulWriteTimestamp": "1680945093000",
     "totalProcessedRecordsCount": 71027,
-    "dataFilesPath": "s3://db-industry-gtm/fsi/solutions/guidewire/policy_holders/",
+    "dataFilesPath": "s3://{{BUCKET_NAME}}/cda/policy_holders/",
     "schemaHistory": {
       "301248659": "1680535502000",
       "301248660": "1680945093000"
@@ -11,7 +11,7 @@
   "policy_holders2": {
     "lastSuccessfulWriteTimestamp": "1680945093000",
     "totalProcessedRecordsCount": 71027,
-    "dataFilesPath": "s3://db-industry-gtm/fsi/solutions/guidewire/policy_holders/",
+    "dataFilesPath": "s3://{{BUCKET_NAME}}/cda/policy_holders/",
     "schemaHistory": {
       "301248659": "1680535502000",
       "301248660": "1680945093000"
@@ -20,7 +20,7 @@
   "policy_holders3": {
     "lastSuccessfulWriteTimestamp": "1680945093000",
     "totalProcessedRecordsCount": 71027,
-    "dataFilesPath": "s3://db-industry-gtm/fsi/solutions/guidewire/policy_holders/",
+    "dataFilesPath": "s3://{{BUCKET_NAME}}/cda/policy_holders/",
     "schemaHistory": {
       "301248659": "1680535502000",
       "301248660": "1680945093000"

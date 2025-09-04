@@ -1,0 +1,52 @@
+services:
+  localstack:
+    container_name: localstack-s3
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"            # LocalStack Gateway
+      - "4510-4559:4510-4559"  # external services port range
+    environment:
+      # LocalStack configuration
+      - DEBUG=1
+      - SERVICES=s3
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - START_WEB=1
+      # AWS configuration
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      # S3-specific configuration
+      - S3_SKIP_SIGNATURE_VALIDATION=1
+      - PERSISTENCE=1
+    volumes:
+      - "./testing/tmp/localstack:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  azurite:
+    container_name: azurite-storage
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    ports:
+      - "10000:10000"  # Blob service
+    environment:
+      - AZURITE_ACCOUNTS=testingstorage:Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==
+    command: >
+      azurite-blob
+      --blobHost 0.0.0.0
+      --blobPort 10000
+      --location /data
+      --debug /data/debug.log
+      --loose
+      --skipApiVersionCheck
+    volumes:
+      - "./testing/tmp/azurite:/data"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10000/testingstorage?comp=properties&restype=service"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
