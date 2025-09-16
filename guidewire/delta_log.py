@@ -39,7 +39,6 @@ class BaseDeltaLog(ABC):
         self.log_uri = ""
         self.storage_options = {}
         self.transaction_count = 0
-        self.checkpoint_mutation = False
         self.table_name = ""
         self.fs = None
         
@@ -220,7 +219,6 @@ class BaseDeltaLog(ABC):
                 self.delta_log.create_write_transaction(
                     actions=actions, mode=mode, schema=schema, partition_by=[],
                     commit_properties=commit_properties,
-                    post_commithook_properties=post_commithook_properties
                 )
                 # This update is optional as it only refreshes the delta log reference. 
                 # Will cause warning on fail but stops azure failure bringing down the pipeline
