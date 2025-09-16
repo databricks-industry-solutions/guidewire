@@ -163,7 +163,6 @@ AWS_S3_BUCKET=yourbucket
 ### Optional Configuration
 ```bash
 RAY_DEDUP_LOGS=0                        # Disable duplicate ray logs
-DELTA_LOG_CHECKPOINT_INTERVAL=100       # Checkpoint interval
 SHOW_TABLE_PROGRESS=1                   # Enable progress bars
 AWS_ENDPOINT_URL=http://localhost:4566  # Custom S3 endpoint (LocalStack)
 ```

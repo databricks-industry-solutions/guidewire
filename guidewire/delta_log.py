@@ -39,7 +39,7 @@ class BaseDeltaLog(ABC):
         self.log_uri = ""
         self.storage_options = {}
         self.transaction_count = 0
-        self.checkpoint_interval = int(os.getenv("DELTA_LOG_CHECKPOINT_INTERVAL", 100))
+        self.checkpoint_mutation = False
         self.table_name = ""
         self.fs = None
         
@@ -156,24 +156,6 @@ class BaseDeltaLog(ABC):
             L.warning(f"Failed to get watermark from log for {self.table_name}: {e}")
             return {"watermark": 0, "schema_timestamp": 0}
 
-    def _create_checkpoint(self) -> bool:
-        """Create a checkpoint for the Delta table.
-        
-        Returns:
-            bool: True if checkpoint creation was successful, False otherwise
-        """
-        if not self.table_exists():
-            L.warning(f"Cannot create checkpoint for non-existent table: {self.table_name}")
-            return False
-            
-        try:
-            self.delta_log.create_checkpoint()
-            L.debug(f"Successfully created checkpoint for {self.table_name}")
-            return True
-        except Exception as e:
-            L.warning(f"Failed to create checkpoint for {self.table_name}: {e}")
-            return False
-
     def add_transaction(
         self, 
         parquets: List[Dict[str, Union[str, int]]], 
@@ -220,7 +202,6 @@ class BaseDeltaLog(ABC):
         try:
             schema = Schema.from_arrow(schema)
             commit_properties = CommitProperties(custom_metadata={"watermark": str(watermark), "schema_timestamp": str(schema_timestamp)})
-            post_commithook_properties = PostCommitHookProperties(create_checkpoint=False, cleanup_expired_logs=False)
             if self.delta_log is None:
                 L.debug(f"Creating new table: {self.table_name}")       
                 create_table_with_add_actions(
@@ -231,8 +212,7 @@ class BaseDeltaLog(ABC):
                     partition_by=[],
                     name=self.table_name,
                     storage_options=self.storage_options,
-                    commit_properties=commit_properties,
-                    post_commithook_properties=post_commithook_properties
+                    commit_properties=commit_properties
                 )
             else:
                 L.debug(f"Adding to table: {self.table_name} - watermark: {watermark}")
@@ -249,13 +229,7 @@ class BaseDeltaLog(ABC):
                 except:
                     L.warning(f"Failed to update delta log for {self.table_name} after transaction, sleeping for some time")
                     sleep(10)
-                    
-            # Increment transaction counter and check for checkpoint
-            self.transaction_count += 1
-            if self.transaction_count % self.checkpoint_interval == 0:
-                L.debug(f"Reached {self.checkpoint_interval} transactions for {self.table_name}, creating checkpoint")
-                self._create_checkpoint()
-                
+
         except Exception as e:
             L.error(f"Failed to add transaction for {self.table_name}: {e}")
             raise DeltaError(f"Failed to add transaction: {e}")
