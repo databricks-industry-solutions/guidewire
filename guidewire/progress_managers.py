@@ -647,6 +647,16 @@ class MultiProgressManager:
                 self._update_live_display()
                 last_update = current_time
             
+            # Additional check: if all tables are completed in the actor, break out
+            # This handles the intermittent case where futures don't get marked as ready
+            # but all actual work is done
+            try:
+                if self.tracker_actor and ray.get(self.tracker_actor.is_all_complete.remote(), timeout=0.5):
+                    L.debug("All tables completed in actor - breaking from wait loop")
+                    break
+            except (ray.exceptions.GetTimeoutError, Exception) as e:
+                L.debug(f"Could not check actor completion status: {e}")
+            
             # Small sleep to prevent busy waiting, but keep it short for responsive updates
             if remaining_futures:
                 time.sleep(1.0)
