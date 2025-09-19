@@ -7,6 +7,7 @@ from guidewire.manifest import Manifest
 from typing import Optional
 from guidewire.results import Result
 from datetime import datetime
+import ray
 
 class Batch:
     def __init__(
@@ -18,6 +19,8 @@ class Batch:
         storage_container: Optional[str],
         reset: bool = False,
         subfolder: Optional[str] = None,
+        progress_manager = None,
+        parallel: bool = False,
     ):
         """Initialize a new Batch instance.
         
@@ -29,6 +32,8 @@ class Batch:
             storage_container: Storage container name (Azure only, None for AWS)
             reset: Whether to reset the processing state
             subfolder: Optional subfolder to process
+            progress_manager: Optional progress manager (Ray actor if parallel=True)
+            parallel: Whether this batch is running in parallel mode with Ray
         Raises:
             ValueError: If required parameters are invalid
         """
@@ -45,6 +50,8 @@ class Batch:
         self.manifest = manifest
         self.entry = self.manifest.read(entry=self.table_name)
         self.cached_schema = None
+        self.progress_manager = progress_manager
+        self.parallel = parallel
         if target_cloud == "azure":
             self.log_entry = AzureDeltaLog(
                 storage_account=storage_or_s3_name,
@@ -63,6 +70,12 @@ class Batch:
         self.watermark_info = self.log_entry._get_watermark_from_log()
         self.low_watermark = 0 if reset else self.watermark_info["watermark"]
         self.watermark_schema_timestamp = 0 if reset else self.watermark_info["schema_timestamp"]
+        
+        # Configuration to control timestamp transaction behavior
+        # 0 = batch all add actions and commit once per schema with latest timestamp as watermark
+        # 1 = maintain existing behavior of one commit per timestamp folder (default)
+        self.maintain_timestamp_transactions = int(os.environ.get("MAINTAIN_TIMESTAMP_TRANSACTIONS", "1"))
+        
         if reset:
             self.log_entry.remove_log()
         self.result = Result(
@@ -80,12 +93,38 @@ class Batch:
             errors=[],
             warnings=[]
         )
-        if os.environ.get("SHOW_TABLE_PROGRESS") == "0":
-            self.show_progress = False
-            self._progress_bar = None
-        else:
-            self.show_progress = True
-            self._progress_bar = self._get_progress_bar_class()
+    
+    def _update_progress_safe(self, folders_processed: int, total_folders: int):
+        """Safely update progress using unified interface."""
+        try:
+            if self.progress_manager:
+                if self.parallel:
+                    # Ray actor call - use fire-and-forget for better performance
+                    self.progress_manager.update_progress.remote(
+                        self.table_name, folders_processed, total_folders, ""
+                    )
+                else:
+                    # Direct progress manager call
+                    self.progress_manager.update_progress(
+                        self.table_name, folders_processed, total_folders, ""
+                    )
+        except Exception as e:
+            # Don't let progress errors break processing
+            print(f"Progress update error: {e}")
+    
+    def _complete_table_safe(self, error_message=None):
+        """Safely complete table progress using unified interface."""
+        try:
+            if self.progress_manager:
+                if self.parallel:
+                    # Ray actor call - use fire-and-forget for completion too
+                    self.progress_manager.complete_table.remote(self.table_name, error_message)
+                else:
+                    # Direct progress manager call
+                    self.progress_manager.complete_table(self.table_name, error_message)
+        except Exception as e:
+            # Don't let progress errors break processing
+            print(f"Progress complete error: {e}")
 
     def _log_error(self, error_message: str) -> None:
         """Log an error message and add it to the result's errors list."""
@@ -97,19 +136,6 @@ class Batch:
         L.warning(warning_message)
         self.result.add_warning(warning_message)
 
-    def _get_progress_bar_class(self):
-        """Determine which tqdm class to use based on Ray availability and initialization."""
-        try:
-            import ray
-            if ray.is_initialized():
-                from ray.experimental.tqdm_ray import tqdm
-                return tqdm
-            else:
-                from tqdm import tqdm
-                return tqdm
-        except (ImportError, AttributeError):
-            from tqdm import tqdm
-            return tqdm
 
     def _schema_finder(self, file_list: list[dict[str, str | int]]) -> bool:
         """Attempts to find and cache the schema from a list of files.
@@ -228,11 +254,7 @@ class Batch:
         if partial:
             L.debug(f"  Found partial schema history in {folder}, processing only new timestamps.")
 
-
-
-        first_folder_for_schema = True
-        
-# Filter out invalid folders before creating progress bar
+        # Filter out invalid folders before creating progress bar
         valid_timestamp_folders = []
         for folder in timestamp_folders:
             try:
@@ -240,65 +262,144 @@ class Batch:
                 valid_timestamp_folders.append(folder)
             except ValueError:
                 L.warning(f"Skipping non-numeric timestamp folder: {folder}")
-
-        # Initialize progress bar variable if there are more than 50 folders. Lower than this can kill the UI
-        pbar = None
-        if len(valid_timestamp_folders) > 50 and self.show_progress and self._progress_bar:
-            # Create progress bar outside the loop
-            pbar = self._progress_bar(total=len(valid_timestamp_folders),
-                                    desc=f"Table: {self.table_name} Schema: {schema_timestamp}",
-                                    unit="folder")
+        
+        if self.progress_manager:
+            # Start table processing with actual total (table should already be registered)
+            try:
+                if self.parallel:
+                    # Ray actor call - fire-and-forget for start_table
+                    self.progress_manager.start_table.remote(
+                        self.table_name, 
+                        len(valid_timestamp_folders)
+                    )
+                else:
+                    # Direct progress manager call
+                    self.progress_manager.start_table(
+                        self.table_name, 
+                        len(valid_timestamp_folders)
+                    )
+            except Exception as e:
+                # Don't let progress tracking errors break processing
+                print(f"Progress tracking error: {e}")
         
         try:
-            for timestamp_folder in valid_timestamp_folders:
-                timestamp_value = int(timestamp_folder.split("/")[-1])
-                L.debug(f"  Checking timestamp path: {timestamp_folder}")
-                try:
-                    files_in_timestamp = self._get_parquet_list(timestamp_folder)
-                except Exception as e:
-                    L.error(f"  Failed to list contents of {timestamp_folder}: {e}")
-                    if pbar:
-                        pbar.update(1)
-                    continue
+            if self.maintain_timestamp_transactions == 0:
+                # Batch mode: collect all files and commit once with latest timestamp as watermark
+                self._process_schema_history_batched(valid_timestamp_folders, schema_timestamp, partial, folder)
+            else:
+                # Original mode: one commit per timestamp folder
+                self._process_schema_history_individual(valid_timestamp_folders, schema_timestamp, partial, folder)
+        finally:
+            # Complete progress tracking (Ray-compatible)
+            self._complete_table_safe()
 
-                if first_folder_for_schema:
+    def _process_schema_history_batched(self, valid_timestamp_folders: list, schema_timestamp: int, partial: bool, folder: str) -> None:
+        """Process schema history with batched commits - all add actions in one commit per schema."""
+        all_parquet_files = []
+        latest_timestamp = 0
+        schema_found = False
+        
+        # Collect all files from all timestamp folders
+        for i, timestamp_folder in enumerate(valid_timestamp_folders):
+            timestamp_value = int(timestamp_folder.split("/")[-1])
+            L.debug(f"  Collecting files from timestamp path: {timestamp_folder}")
+            
+            try:
+                files_in_timestamp = self._get_parquet_list(timestamp_folder)
+            except Exception as e:
+                error_message = f"Failed to list contents of {timestamp_folder}: {e}"
+                L.error(f"  {error_message}")
+                self._complete_table_safe(error_message)
+                raise
+
+            if not schema_found and files_in_timestamp:
+                # Find schema from first available files
+                if self._schema_finder(files_in_timestamp):
+                    schema_found = True
                     self.result.add_schema_timestamp(schema_timestamp)
-                    if self._schema_finder(files_in_timestamp):
-                        first_folder_for_schema = False
-                        self.log_entry.add_transaction(
-                            parquets=files_in_timestamp,
-                            schema=self.cached_schema,
-                            watermark=timestamp_value,
-                            schema_timestamp=schema_timestamp,
-                            mode="overwrite" if not partial else "append",
-                        )
-                    else:
-                        error_message = f"Schema not found for '{self.table_name} {folder}'"
-                        self._log_error(error_message)
-                        if pbar:
-                            pbar.close()
-                        # Don't return here - let the caller handle the error
-                        raise ValueError(error_message)
-                else:
+                    L.debug(f"Schema found for batched processing of '{self.table_name}'")
+
+            # Add files to batch collection
+            all_parquet_files.extend(files_in_timestamp)
+            
+            # Track latest timestamp and watermarks for result tracking
+            if timestamp_value > latest_timestamp:
+                latest_timestamp = timestamp_value
+            self.result.add_watermark(timestamp_value)
+            
+            # Update progress (Ray-compatible)
+            self._update_progress_safe(i + 1, len(valid_timestamp_folders))
+
+        if not schema_found:
+            error_message = f"Schema not found for '{self.table_name} {folder}'"
+            self._log_error(error_message)
+            self._complete_table_safe(error_message)
+            raise ValueError(error_message)
+
+        if all_parquet_files:
+            # Single commit with all files and latest timestamp as watermark
+            L.debug(f"Committing {len(all_parquet_files)} files in batch for '{self.table_name}' with watermark {latest_timestamp}")
+            self.log_entry.add_transaction(
+                parquets=all_parquet_files,
+                schema=self.cached_schema,
+                watermark=latest_timestamp,  # Use latest timestamp as watermark
+                schema_timestamp=schema_timestamp,
+                mode="overwrite" if not partial else "append",
+            )
+            self.result.update(
+                process_finish_watermark=latest_timestamp,
+                process_finish_version=self.log_entry.delta_log.version() if self.log_entry.delta_log else 0
+            )
+
+    def _process_schema_history_individual(self, valid_timestamp_folders: list, schema_timestamp: int, partial: bool, folder: str) -> None:
+        """Process schema history with individual commits - one commit per timestamp folder (original behavior)."""
+        first_folder_for_schema = True
+        
+        for i, timestamp_folder in enumerate(valid_timestamp_folders):
+            timestamp_value = int(timestamp_folder.split("/")[-1])
+            L.debug(f"  Checking timestamp path: {timestamp_folder}")
+            try:
+                files_in_timestamp = self._get_parquet_list(timestamp_folder)
+            except Exception as e:
+                error_message = f"Failed to list contents of {timestamp_folder}: {e}"
+                L.error(f"  {error_message}")
+                # Complete with error - this is a critical failure
+                self._complete_table_safe(error_message)
+                raise
+
+            if first_folder_for_schema:
+                self.result.add_schema_timestamp(schema_timestamp)
+                if self._schema_finder(files_in_timestamp):
+                    first_folder_for_schema = False
                     self.log_entry.add_transaction(
                         parquets=files_in_timestamp,
                         schema=self.cached_schema,
                         watermark=timestamp_value,
                         schema_timestamp=schema_timestamp,
-                        mode="append",
+                        mode="overwrite" if not partial else "append",
                     )
-                self.result.add_watermark(timestamp_value)
-                self.result.update(
-                    process_finish_watermark=timestamp_value,
-                    process_finish_version=self.log_entry.delta_log.version() if self.log_entry.delta_log else 0
+                else:
+                    error_message = f"Schema not found for '{self.table_name} {folder}'"
+                    self._log_error(error_message)
+                    # Update progress with error (Ray-compatible)
+                    self._complete_table_safe(error_message)
+                    # Don't return here - let the caller handle the error
+                    raise ValueError(error_message)
+            else:
+                self.log_entry.add_transaction(
+                    parquets=files_in_timestamp,
+                    schema=self.cached_schema,
+                    watermark=timestamp_value,
+                    schema_timestamp=schema_timestamp,
+                    mode="append",
                 )
-                # Increment the progress bar
-                if pbar:
-                    pbar.update(1)
-        finally:
-            # Close the progress bar at the end
-            if pbar:
-                pbar.close()
+            self.result.add_watermark(timestamp_value)
+            self.result.update(
+                process_finish_watermark=timestamp_value,
+                process_finish_version=self.log_entry.delta_log.version() if self.log_entry.delta_log else 0
+            )
+            # Update progress (Ray-compatible)
+            self._update_progress_safe(i + 1, len(valid_timestamp_folders))
 
 
     def process_batch(self) -> Result:
@@ -312,6 +413,7 @@ class Batch:
                 process_finish_time=datetime.now(),
                 process_finish_watermark=self.low_watermark
             )
+            self._complete_table_safe(error_message=error_message)
             return self.result
             
         if int(self.entry["lastSuccessfulWriteTimestamp"]) <= self.low_watermark:
@@ -321,6 +423,7 @@ class Batch:
                 process_finish_time=datetime.now(),
                 process_finish_watermark=self.low_watermark
             )
+            self._complete_table_safe()
             return self.result
         
         L.debug(f"Processing batch for {self.table_name}")
@@ -334,6 +437,7 @@ class Batch:
                 process_finish_time=datetime.now(),
                 process_finish_watermark=self.low_watermark
             )
+            self._complete_table_safe(error_message=error_message)
             return self.result
 
         # Uses sorted to ensure the schema history is processed in order
@@ -360,7 +464,6 @@ class Batch:
                 self._process_schema_history(item)
             self.result.update(process_finish_time=datetime.now())
             return self.result
-            #self.log_entry.write_checkpoint(int(self.entry["lastSuccessfulWriteTimestamp"]))
         except Exception as e:
             error_message = f"Error processing schema history for {self.table_name}: {e} processing abandoned"
             self._log_error(error_message)

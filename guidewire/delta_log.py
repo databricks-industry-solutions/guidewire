@@ -55,7 +55,8 @@ class BaseDeltaLog(ABC):
         """Check if the Delta log exists and initialize it if found."""
         try:
             self.delta_log = DeltaTable(
-                table_uri=self.log_uri, storage_options=self.storage_options
+                table_uri=self.log_uri, storage_options=self.storage_options,
+                without_files=True,log_buffer_size=1
             )
         except Exception as e:
             # If it's a file not found error, that is ok
@@ -143,12 +144,8 @@ class BaseDeltaLog(ABC):
             history = self.delta_log.history()
             if history:
                 latest_entry = history[0]
-                operation_parameters = latest_entry.get("operationParameters", {})
-                metadata = latest_entry.get("operationMetrics", {})
-                
-                watermark = int(operation_parameters.get("watermark", 0))
-                schema_timestamp = int(operation_parameters.get("schema_timestamp", 0))
-                
+                watermark = int(latest_entry.get("watermark", 0))
+                schema_timestamp = int(latest_entry.get("schema_timestamp", 0))
                 return {"watermark": watermark, "schema_timestamp": schema_timestamp}
             return {"watermark": 0, "schema_timestamp": 0}
         except Exception as e:
@@ -211,8 +208,14 @@ class BaseDeltaLog(ABC):
                     partition_by=[],
                     name=self.table_name,
                     storage_options=self.storage_options,
-                    commit_properties=commit_properties
+                    commit_properties=commit_properties,
+                    configuration={"delta.checkpointPolicy": "v2",
+                                   "delta.checkpointInterval": "50",
+                                   "delta.isolationLevel": "WriteSerializable"
+                                   },
                 )
+                # Initialize delta_log reference after creating the table
+                self._log_exists()
             else:
                 L.debug(f"Adding to table: {self.table_name} - watermark: {watermark}")
                 

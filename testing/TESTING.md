@@ -10,6 +10,7 @@ The integration tests validate:
 - ✅ Storage class functionality with both backends
 - ✅ Manifest file reading and processing
 - ✅ End-to-end data processing workflows
+- ✅ Watermarking functionality and incremental processing
 - ✅ Error handling and recovery scenarios
 
 ## Quick Start
@@ -68,11 +69,14 @@ The tests use Docker Compose to run:
 
 ```
 testing/tests/
-├── test_s3_integration.py          # Direct S3 API tests
-├── test_azure_integration.py       # Direct Azure Blob API tests
-├── test_storage_integration.py     # Storage class tests
-├── test_manifest_integration.py    # Manifest class tests
-└── test_end_to_end_integration.py  # Complete workflow tests
+├── test_s3_integration.py              # Direct S3 API tests
+├── test_azure_integration.py           # Direct Azure Blob API tests
+├── test_storage_integration.py         # Storage class tests
+├── test_manifest_integration.py        # Manifest class tests
+├── test_end_to_end_integration.py      # Complete workflow tests
+├── test_watermarking_integration.py    # Watermarking functionality tests (integration)
+├── test_watermarking_unit.py           # Watermarking functionality tests (unit)
+└── test_target_cloud_config.py         # Target cloud configuration tests
 ```
 
 ## Test Commands
@@ -118,8 +122,17 @@ make test-manifest
 # End-to-end workflow tests
 make test-e2e
 
+# Watermarking functionality tests
+make test-watermark
+
+# Watermarking unit tests (fast, no services required)
+make test-watermark-unit
+
 # Slow/comprehensive tests
 make test-slow
+
+# Slow watermarking tests
+make test-watermark-slow
 ```
 
 ### Direct pytest Commands
@@ -147,6 +160,7 @@ Fast tests that run without external dependencies:
 - Utility function tests
 - Configuration validation tests
 - Mock-based tests
+- Watermarking logic and data structure tests
 
 ### Integration Tests (`-m integration`)
 Tests that require Docker services to be running:
@@ -163,6 +177,16 @@ Comprehensive tests that process larger datasets:
 - Large file processing simulations
 - Complete data validation workflows
 - Performance-focused scenarios
+- Complete watermarking workflow tests
+
+### Watermarking Tests
+Specialized tests for watermarking functionality:
+- Watermark persistence in Delta log metadata
+- Incremental processing based on watermarks
+- Directory filtering using timestamp watermarks
+- Error handling in watermark operations
+- Both batched and individual transaction modes
+- Cross-cloud watermarking (AWS S3 ↔ Azure)
 
 ## Example Data Usage
 

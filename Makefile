@@ -1,7 +1,7 @@
-.PHONY: help test test-integration test-s3 test-azure test-storage test-manifest test-e2e test-slow test-quick docker-up docker-down clean
+.PHONY: help test test-integration test-s3 test-azure test-storage test-manifest test-e2e test-watermark test-watermark-unit test-slow test-watermark-slow test-quick docker-up docker-down clean
 
 help:  ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 
 # Docker management
@@ -47,8 +47,17 @@ test-manifest: docker-up  ## Run Manifest class integration tests
 test-e2e: docker-up  ## Run end-to-end workflow tests
 	pytest testing/tests/test_end_to_end_integration.py -v -m integration
 
+test-watermark: docker-up  ## Run watermarking functionality tests
+	pytest testing/tests/test_watermarking_integration.py -v -m integration
+
+test-watermark-unit:  ## Run watermarking unit tests (fast, no services required)
+	pytest testing/tests/test_watermarking_unit.py -v -m unit
+
 test-slow: docker-up  ## Run slow/comprehensive tests
 	pytest testing/tests/ -v -m slow
+
+test-watermark-slow: docker-up  ## Run slow watermarking tests
+	pytest testing/tests/test_watermarking_integration.py -v -m slow
 
 test-quick: docker-up  ## Run quick integration tests (exclude slow tests)
 	pytest testing/tests/ -v -m integration -m "not slow"
