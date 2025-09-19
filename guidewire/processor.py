@@ -9,7 +9,7 @@ from guidewire.progress_managers import SimpleProgressManager, MultiProgressMana
 class Processor:
     """A class to handle table processing operations."""
     
-    def __init__(self, target_cloud: str, table_names: Tuple[str, ...] = None, parallel: bool = True, exceptions: list = None) -> None:
+    def __init__(self, target_cloud: str, table_names: Tuple[str, ...] = None, parallel: bool = True, exceptions: list = None, show_progress: bool = True, maintain_timestamp_transactions: bool = True, largest_tables_first_count: int = None) -> None:
         """Initialize the Processor with table names and parallel processing.
         if table_names is not provided, all tables in the manifest will be processed.
         if parallel is False, the tables will be processed sequentially.
@@ -20,11 +20,20 @@ class Processor:
             table_names: Tuple of table names to process
             parallel: Whether to process tables in parallel using Ray (default: True)
             exceptions: List of table names to exclude from processing
+            show_progress: Whether to show table progress (default: True)
+            maintain_timestamp_transactions: Whether to maintain timestamp transactions (default: True)
+            largest_tables_first_count: Number of largest tables to process first for optimization (default: None, disables ordering)
         """
         self.table_names = table_names
         self.exceptions = exceptions
         self.parallel = parallel
         self.target_cloud = target_cloud
+        
+        # Store parameters directly
+        self.show_progress = show_progress
+        self.maintain_timestamp_transactions = maintain_timestamp_transactions
+        self.largest_tables_first_count = largest_tables_first_count
+        
         self._validate_environment()
         
         # Set target cloud storage configuration based on target_cloud parameter
@@ -56,13 +65,9 @@ class Processor:
 
         self.results = []
         
-        # Check if progress should be shown based on environment variable
-        self.show_progress = os.environ.get("SHOW_TABLE_PROGRESS", "1") != "0"
-        
-        
-        self.largest_first_flag = os.environ.get("LARGEST_TABLES_FIRST_COUNT")
-        if self.largest_first_flag:
-            self.table_names = self._order_tables_by_size(self.table_names)
+        # Order tables by size if largest_tables_first_count is specified
+        if self.largest_tables_first_count is not None and self.largest_tables_first_count > 0:
+            self.table_names = self._order_tables_by_size(self.table_names, self.largest_tables_first_count)
         
         # Initialize progress manager for sequential processing only if progress should be shown
         self.progress_manager = SimpleProgressManager(show_progress=True) if self.show_progress else None
@@ -197,7 +202,7 @@ class Processor:
         
     @staticmethod
     @ray.remote
-    def process_table_async(entry: str, manifest: Manifest, target_cloud: str, log_storage_account: str, log_storage_container: str, subfolder: str = None, tracker_actor = None) -> Optional[Result]:
+    def process_table_async(entry: str, manifest: Manifest, target_cloud: str, log_storage_account: str, log_storage_container: str, subfolder: str = None, tracker_actor = None, maintain_timestamp_transactions: bool = True) -> Optional[Result]:
         """
         Process a single table entry asynchronously with Ray.
         
@@ -209,6 +214,7 @@ class Processor:
             log_storage_container: Storage container name (Azure only, None for AWS)
             subfolder: Optional subfolder name
             tracker_actor: Ray actor for progress tracking
+            maintain_timestamp_transactions: Whether to maintain timestamp transactions
         """
         batch_result = None
         try:
@@ -223,6 +229,7 @@ class Processor:
                     subfolder=subfolder,
                     progress_manager=tracker_actor,  # Pass Ray actor directly
                     parallel=True,  # This is the async parallel processing path
+                    maintain_timestamp_transactions=maintain_timestamp_transactions,
                 ).process_batch()
                 return batch_result
             else:
@@ -231,7 +238,7 @@ class Processor:
             return batch_result
 
     @staticmethod
-    def process_table(entry: str, manifest: Manifest, target_cloud: str, log_storage_account: str, log_storage_container: str, subfolder: str = None, progress_manager = None) -> Optional[Result]:
+    def process_table(entry: str, manifest: Manifest, target_cloud: str, log_storage_account: str, log_storage_container: str, subfolder: str = None, progress_manager = None, maintain_timestamp_transactions: bool = True) -> Optional[Result]:
         """
         Process a single table entry sequentially (non-parallel).
         
@@ -242,6 +249,8 @@ class Processor:
             log_storage_account: Storage account name (Azure) or S3 bucket name (AWS)
             log_storage_container: Storage container name (Azure only, None for AWS)
             subfolder: Optional subfolder name
+            progress_manager: Optional progress manager
+            maintain_timestamp_transactions: Whether to maintain timestamp transactions
         """
         batch_result = None
         try:
@@ -256,6 +265,7 @@ class Processor:
                     subfolder=subfolder,
                     progress_manager=progress_manager,
                     parallel=False,  # This is the sequential processing path
+                    maintain_timestamp_transactions=maintain_timestamp_transactions,
                 ).process_batch()
                 return batch_result
             else:
@@ -290,7 +300,7 @@ class Processor:
                         self.process_table_async.remote(
                             entry, self.manifest, self.target_cloud, 
                             self.log_storage_account, self.log_storage_container, 
-                            self.subfolder, tracker_actor
+                            self.subfolder, tracker_actor, self.maintain_timestamp_transactions
                         )
                         for entry in self.table_names
                     ]      
@@ -302,7 +312,7 @@ class Processor:
                         self.process_table_async.remote(
                             entry, self.manifest, self.target_cloud, 
                             self.log_storage_account, self.log_storage_container, 
-                            self.subfolder
+                            self.subfolder, None, self.maintain_timestamp_transactions
                         )
                         for entry in self.table_names
                     ]
@@ -317,7 +327,7 @@ class Processor:
                         self.progress_manager.register_table(table_name)
                 
                 for entry in self.table_names:
-                    result = self.process_table(entry, self.manifest, self.target_cloud, self.log_storage_account, self.log_storage_container, self.subfolder, self.progress_manager)
+                    result = self.process_table(entry, self.manifest, self.target_cloud, self.log_storage_account, self.log_storage_container, self.subfolder, self.progress_manager, self.maintain_timestamp_transactions)
                     self.results.append(result)
                     
                 if progress_display and self.progress_manager:

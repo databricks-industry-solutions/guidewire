@@ -21,6 +21,7 @@ class Batch:
         subfolder: Optional[str] = None,
         progress_manager = None,
         parallel: bool = False,
+        maintain_timestamp_transactions: bool = True,
     ):
         """Initialize a new Batch instance.
         
@@ -34,6 +35,7 @@ class Batch:
             subfolder: Optional subfolder to process
             progress_manager: Optional progress manager (Ray actor if parallel=True)
             parallel: Whether this batch is running in parallel mode with Ray
+            maintain_timestamp_transactions: Whether to maintain timestamp transactions (default: True)
         Raises:
             ValueError: If required parameters are invalid
         """
@@ -72,9 +74,9 @@ class Batch:
         self.watermark_schema_timestamp = 0 if reset else self.watermark_info["schema_timestamp"]
         
         # Configuration to control timestamp transaction behavior
-        # 0 = batch all add actions and commit once per schema with latest timestamp as watermark
-        # 1 = maintain existing behavior of one commit per timestamp folder (default)
-        self.maintain_timestamp_transactions = int(os.environ.get("MAINTAIN_TIMESTAMP_TRANSACTIONS", "1"))
+        # False = batch all add actions and commit once per schema with latest timestamp as watermark
+        # True = maintain existing behavior of one commit per timestamp folder (default)
+        self.maintain_timestamp_transactions = maintain_timestamp_transactions
         
         if reset:
             self.log_entry.remove_log()
@@ -283,7 +285,7 @@ class Batch:
                 print(f"Progress tracking error: {e}")
         
         try:
-            if self.maintain_timestamp_transactions == 0:
+            if not self.maintain_timestamp_transactions:
                 # Batch mode: collect all files and commit once with latest timestamp as watermark
                 self._process_schema_history_batched(valid_timestamp_folders, schema_timestamp, partial, folder)
             else:

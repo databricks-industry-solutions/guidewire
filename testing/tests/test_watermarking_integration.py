@@ -733,7 +733,7 @@ class TestWatermarkingIntegration:
 
     @pytest.mark.integration
     def test_batched_vs_individual_transaction_modes(self):
-        """Test watermark behavior in both transaction modes (MAINTAIN_TIMESTAMP_TRANSACTIONS)."""
+        """Test watermark behavior in both transaction modes (maintain_timestamp_transactions parameter)."""
         # Use real example data for consistency
         uploaded_files = self._upload_example_data()
         assert len(uploaded_files) > 0, "No example files were uploaded"
@@ -751,8 +751,8 @@ class TestWatermarkingIntegration:
         }
         
         # Test Case 1: Individual transactions (default behavior)
-        print("🔄 Testing individual transaction mode (MAINTAIN_TIMESTAMP_TRANSACTIONS=1)...")
-        with patch.dict(os.environ, {**base_env, 'MAINTAIN_TIMESTAMP_TRANSACTIONS': '1'}):
+        print("🔄 Testing individual transaction mode (maintain_timestamp_transactions=True)...")
+        with patch.dict(os.environ, base_env):
             manifest = Manifest(location=f"{self.test_bucket}/cda")  # Fixed: use cda/ prefix
             
             batch_individual = Batch(
@@ -762,15 +762,16 @@ class TestWatermarkingIntegration:
                 storage_or_s3_name=self.test_bucket,
                 storage_container=None,
                 reset=True,
-                subfolder="delta_tables_individual"
+                subfolder="delta_tables_individual",
+                maintain_timestamp_transactions=True  # Use parameter instead of env var
             )
             
-            assert batch_individual.maintain_timestamp_transactions == 1
+            assert batch_individual.maintain_timestamp_transactions == True
             print(f"  Individual mode configured: {batch_individual.maintain_timestamp_transactions}")
         
         # Test Case 2: Batched transactions
-        print("🔄 Testing batched transaction mode (MAINTAIN_TIMESTAMP_TRANSACTIONS=0)...")
-        with patch.dict(os.environ, {**base_env, 'MAINTAIN_TIMESTAMP_TRANSACTIONS': '0'}):
+        print("🔄 Testing batched transaction mode (maintain_timestamp_transactions=False)...")
+        with patch.dict(os.environ, base_env):
             manifest = Manifest(location=f"{self.test_bucket}/cda")  # Fixed: use cda/ prefix
             
             batch_batched = Batch(
@@ -780,10 +781,11 @@ class TestWatermarkingIntegration:
                 storage_or_s3_name=self.test_bucket,
                 storage_container=None,
                 reset=True,
-                subfolder="delta_tables_batched"
+                subfolder="delta_tables_batched",
+                maintain_timestamp_transactions=False  # Use parameter instead of env var
             )
-            
-            assert batch_batched.maintain_timestamp_transactions == 0
+
+            assert batch_batched.maintain_timestamp_transactions == False
             print(f"  Batched mode configured: {batch_batched.maintain_timestamp_transactions}")
         
         # Verify that both modes track watermarks in results

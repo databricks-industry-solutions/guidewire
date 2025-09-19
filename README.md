@@ -163,9 +163,6 @@ AWS_S3_BUCKET=yourbucket
 ### Optional Configuration
 ```bash
 RAY_DEDUP_LOGS=0                        # Disable duplicate ray logs
-SHOW_TABLE_PROGRESS=1                   # Enable progress bars
-LARGEST_TABLES_FIRST_COUNT=5            # Process N largest tables first (default: 5)
-MAINTAIN_TIMESTAMP_TRANSACTIONS=1       # 0=batch all adds per schema, 1=one commit per timestamp (default: 1)
 AWS_ENDPOINT_URL=http://localhost:4566  # Custom S3 endpoint (LocalStack)
 ```
 
@@ -186,11 +183,11 @@ The DeltaLog class in delta_log.py manages Delta Lake logs and checkpoints. It s
 ### Processor
 The Processor class in processor.py orchestrates the overall data processing workflow. It manages the parallel processing of data using Ray, coordinates between manifest reading, batch processing, and delta log management. The processor handles the end-to-end pipeline execution, ensuring efficient and reliable data processing across distributed systems.
 
-**Smart Table Ordering**: To optimize parallel processing and prevent resource underutilization, the processor automatically orders tables by size (using `totalProcessedRecordsCount` from the manifest). By default, the 5 largest tables are processed first, preventing scenarios where large tables are processed last while other threads remain idle. This behavior can be controlled via the `LARGEST_TABLES_FIRST_COUNT` environment variable.
+**Smart Table Ordering**: To optimize parallel processing and prevent resource underutilization, the processor can order tables by size (using `totalProcessedRecordsCount` from the manifest). When enabled, the largest tables are processed first, preventing scenarios where large tables are processed last while other threads remain idle. This behavior can be controlled via the `largest_tables_first_count` parameter when creating a Processor instance.
 
-**Transaction Batching**: The system supports two modes for Delta Lake commits via the `MAINTAIN_TIMESTAMP_TRANSACTIONS` configuration:
-- `MAINTAIN_TIMESTAMP_TRANSACTIONS=1` (default): Creates one commit per timestamp folder, maintaining fine-grained transaction history
-- `MAINTAIN_TIMESTAMP_TRANSACTIONS=0`: Batches all add actions per schema into a single commit, using the latest timestamp as the watermark. This reduces the number of Delta Lake versions and provides **significant performance improvements (~40x faster)** for tables with many timestamp folders, as it eliminates the overhead of multiple Delta Lake transactions.
+**Transaction Batching**: The system supports two modes for Delta Lake commits via the `maintain_timestamp_transactions` configuration:
+- `maintain_timestamp_transactions=True` (default): Creates one commit per timestamp folder, maintaining fine-grained transaction history
+- `maintain_timestamp_transactions=False`: Batches all add actions per schema into a single commit, using the latest timestamp as the watermark. This reduces the number of Delta Lake versions and provides **significant performance improvements (~40x faster)** for tables with many timestamp folders, as it eliminates the overhead of multiple Delta Lake transactions.
 
 ### Storage
 The Storage class in storage.py provides a unified interface for cloud storage operations across different providers (AWS S3 and Azure Blob Storage). It handles authentication, file operations, and storage-specific configurations, abstracting away the complexities of interacting with different cloud storage services. This component ensures consistent data access patterns regardless of the underlying storage platform.
@@ -237,7 +234,8 @@ The project requires the following core dependencies:
 
 ## Examples
 
-### Azure Target (Default)
+### Basic Usage
+
 ```python
 from guidewire.processor import Processor
 
@@ -249,6 +247,31 @@ processor = Processor(
 )
 processor.run()
 ```
+
+### Advanced Configuration Options
+
+The Processor class now supports several optional parameters for fine-tuning behavior:
+
+```python
+from guidewire.processor import Processor
+
+# Full configuration with all optional parameters
+processor = Processor(
+    target_cloud="aws",
+    table_names=["policy_holders", "claims"],
+    parallel=True,
+    exceptions=["excluded_table"],  # Tables to skip
+    show_progress=True,  # Show progress bars (default: True)
+    maintain_timestamp_transactions=False,  # Batch mode for better performance (default: True)
+    largest_tables_first_count=10  # Process 10 largest tables first (default: None)
+)
+processor.run()
+```
+
+**Parameter Details:**
+- `show_progress`: Controls whether progress bars are displayed during processing
+- `maintain_timestamp_transactions`: When `False`, enables batch mode for ~40x performance improvement
+- `largest_tables_first_count`: Number of largest tables to prioritize for optimal parallel processing
 
 ### AWS S3 Target  
 ```python
@@ -263,18 +286,27 @@ processor = Processor(
 processor.run()
 ```
 
-### Environment Variable Configuration
+### Performance Optimization Examples
+
 ```python
-import os
 from guidewire.processor import Processor
 
-# Set target via environment variable
-os.environ["DELTA_TARGET_CLOUD"] = "aws"
-
-# Processor will use environment variable
+# High-performance batch mode configuration
 processor = Processor(
-    table_names=["policy_holders"],
-    parallel=False
+    target_cloud="aws",
+    parallel=True,
+    maintain_timestamp_transactions=False,  # ~40x faster processing
+    largest_tables_first_count=5,  # Process largest tables first
+    show_progress=False  # Disable progress bars for maximum speed
+)
+processor.run()
+
+# Memory-efficient sequential processing
+processor = Processor(
+    target_cloud="azure",
+    parallel=False,  # Sequential processing for memory constraints
+    show_progress=True,  # Monitor progress
+    maintain_timestamp_transactions=True  # Fine-grained transaction history
 )
 processor.run()
 ```
@@ -286,7 +318,9 @@ from guidewire.processor import Processor
 # Process all tables from manifest (table_names=None)
 processor = Processor(
     target_cloud="azure",
-    parallel=True  # Process all tables in parallel
+    parallel=True,  # Process all tables in parallel
+    largest_tables_first_count=3,  # Optimize by processing 3 largest first
+    maintain_timestamp_transactions=False  # Use batch mode for better performance
 )
 processor.run()
 
@@ -326,6 +360,48 @@ for result in processor.results:
         print(f"   - Version: {result.process_start_version} → {result.process_finish_version}")
         print(f"   - Watermark: {result.process_start_watermark} → {result.process_finish_watermark}")
 ```
+
+## Migration from Environment Variables
+
+**Breaking Change**: As of version 0.0.6, the following environment variables are no longer supported and have been replaced with constructor parameters:
+
+| Old Environment Variable | New Constructor Parameter | Default Value |
+|--------------------------|---------------------------|---------------|
+| `SHOW_TABLE_PROGRESS` | `show_progress` | `True` |
+| `MAINTAIN_TIMESTAMP_TRANSACTIONS` | `maintain_timestamp_transactions` | `True` |
+| `LARGEST_TABLES_FIRST_COUNT` | `largest_tables_first_count` | `None` |
+
+### Migration Examples:
+
+**Before (using environment variables):**
+```python
+import os
+from guidewire.processor import Processor
+
+# Old approach - no longer works
+os.environ["SHOW_TABLE_PROGRESS"] = "0"
+os.environ["MAINTAIN_TIMESTAMP_TRANSACTIONS"] = "0" 
+os.environ["LARGEST_TABLES_FIRST_COUNT"] = "5"
+
+processor = Processor(target_cloud="aws")
+processor.run()
+```
+
+**After (using constructor parameters):**
+```python
+from guidewire.processor import Processor
+
+# New approach - explicit parameters
+processor = Processor(
+    target_cloud="aws",
+    show_progress=False,
+    maintain_timestamp_transactions=False,
+    largest_tables_first_count=5
+)
+processor.run()
+```
+
+This change provides better type safety, clearer API documentation, and eliminates hidden dependencies on environment variables.
 
 ## Testing
 

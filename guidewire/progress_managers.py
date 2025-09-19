@@ -684,7 +684,7 @@ class MultiProgressManager:
         # Final progress display and cleanup
         if self.live_display:
             self._update_live_display()
-            time.sleep(0.5)  # Let final update display
+            time.sleep(1)  # Let final update display
             self.live_display.stop()
             self.live_display = None
             

@@ -49,11 +49,10 @@ class Manifest:
             # Filter table dictionary to keys in table_names
             if self.table_names:
                 self.manifest = {k: v for k, v in table.items() if k in self.table_names}
+                L.info(f"Successfully loaded manifest for tables: {self.table_names} from {self.location}")
             else:
                 self.manifest = table
-            L.info(
-                f"Successfully loaded manifest for tables: {self.table_names} from {self.location}"
-            )
+                L.info(f"Successfully loaded manifest for all tables from {self.location}")
         except FileNotFoundError:
             L.error(f"Manifest file not found at {manifest_path}")
             raise
