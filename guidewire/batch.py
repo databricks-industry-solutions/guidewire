@@ -429,7 +429,7 @@ class Batch:
             return self.result
         
         L.debug(f"Processing batch for {self.table_name}")
-        filepath = self.entry["dataFilesPath"].lstrip("s3://")
+        filepath = self.entry["dataFilesPath"].replace('s3://', '', 1)
         schema_history = self.entry["schemaHistory"]
         
         if not filepath or not schema_history:
