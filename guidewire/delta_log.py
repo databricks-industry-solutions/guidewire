@@ -190,7 +190,7 @@ class BaseDeltaLog(ABC):
                     size=file["size"],
                     partition_values={},
                     modification_time=file["last_modified"],
-                    data_change=False,
+                    data_change=True,
                     stats="{}",
                 )
             )
