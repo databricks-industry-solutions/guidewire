@@ -214,7 +214,7 @@ class Batch:
         return [
             {
                 "relative_path": file.path,
-                "path": f"s3://{file.path}",
+                "path": f"s3a://{file.path}",
                 "last_modified": file.mtime_ns,
                 "size": file.size,
             }
