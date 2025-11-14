@@ -3,7 +3,7 @@ from time import sleep
 from deltalake.transaction import AddAction, create_table_with_add_actions, CommitProperties
 from deltalake.exceptions import TableNotFoundError
 from deltalake.schema import Schema
-from deltalake import DeltaTable, PostCommitHookProperties
+from deltalake import DeltaTable, PostCommitHookProperties, write_deltalake
 import pyarrow as pa
 from guidewire.logging import logger as L
 from guidewire.storage import AzureStorage, AWSStorage
@@ -55,8 +55,7 @@ class BaseDeltaLog(ABC):
         """Check if the Delta log exists and initialize it if found."""
         try:
             self.delta_log = DeltaTable(
-                table_uri=self.log_uri, storage_options=self.storage_options,
-                without_files=True,log_buffer_size=1
+                table_uri=self.log_uri, storage_options=self.storage_options,log_buffer_size=1
             )
         except Exception as e:
             # If it's a file not found error, that is ok
@@ -132,25 +131,103 @@ class BaseDeltaLog(ABC):
             raise DeltaValidationError("Parquet last_modified must be a non-negative integer")
 
     def _get_watermark_from_log(self) -> dict[str, int]:
-        """Get the watermark and schema timestamp from the most recent Delta log entry.
+        """Get the watermark and schema timestamp from the Delta log entry with fallback strategy.
+        
+        Fallback strategy:
+        1. If table doesn't exist, return zeros
+        2. Check first history record for valid watermarks
+        3. If first record doesn't have valid watermarks, check second record
+        4. If neither has valid watermarks, fail with error (safer than returning zeros)
         
         Returns:
             dict[str, int]: Dictionary containing watermark and schema_timestamp
+            
+        Raises:
+            DeltaError: If no valid watermarks found in first two history records of existing table
         """
+        # Return zeros if table doesn't exist
         if not self.table_exists():
+            L.debug(f"Table {self.table_name} does not exist, returning zero watermarks")
             return {"watermark": 0, "schema_timestamp": 0}
             
         try:
             history = self.delta_log.history()
-            if history:
-                latest_entry = history[0]
-                watermark = int(latest_entry.get("watermark", 0))
-                schema_timestamp = int(latest_entry.get("schema_timestamp", 0))
+            if not history:
+                L.debug(f"No history found for {self.table_name}, returning zero watermarks")
+                return {"watermark": 0, "schema_timestamp": 0}
+            
+            # Helper function to safely extract and validate watermarks
+            def extract_valid_watermarks(entry):
+                try:
+                    watermark_val = entry.get("watermark")
+                    schema_val = entry.get("schema_timestamp")
+                    if watermark_val and schema_val:
+                        # Try to convert to int - if it fails, these aren't valid watermarks
+                        watermark = int(watermark_val)
+                        schema_timestamp = int(schema_val)
+                        return watermark, schema_timestamp
+                except (ValueError, TypeError):
+                    # Invalid values that can't be converted to int
+                    pass
+                return None, None
+            
+            # Check first history record
+            watermark, schema_timestamp = extract_valid_watermarks(history[0])
+            if watermark is not None and schema_timestamp is not None:
+                L.debug(f"Found watermarks in first history record for {self.table_name}: watermark={watermark}, schema_timestamp={schema_timestamp}")
                 return {"watermark": watermark, "schema_timestamp": schema_timestamp}
-            return {"watermark": 0, "schema_timestamp": 0}
+            
+            # Check second history record if available
+            if len(history) > 1:
+                watermark, schema_timestamp = extract_valid_watermarks(history[1])
+                if watermark is not None and schema_timestamp is not None:
+                    L.debug(f"Found watermarks in second history record for {self.table_name}: watermark={watermark}, schema_timestamp={schema_timestamp}")
+                    return {"watermark": watermark, "schema_timestamp": schema_timestamp}
+            
+            # Neither first nor second record has valid watermarks - this is an error for existing tables
+            L.error(f"No valid watermarks found in first two history records for existing table {self.table_name}")
+            raise DeltaError(f"No valid watermarks found in available history records for table {self.table_name}")
+            
+        except DeltaError:
+            # Re-raise DeltaError as-is
+            raise
         except Exception as e:
-            L.warning(f"Failed to get watermark from log for {self.table_name}: {e}")
-            return {"watermark": 0, "schema_timestamp": 0}
+            L.error(f"Failed to get watermark from log for {self.table_name}: {e}")
+            raise DeltaError(f"Failed to get watermark from log: {e}")
+
+    
+    def add_schema_metadata_change(self, schema: pa.Schema) -> None:
+        """Add an empty metadata schema merge operation for schema changes.
+        
+        Args:
+            schema: PyArrow schema for the new schema structure
+        """
+        try:
+            #is there a chance that the latest watermark is not there
+            # Create an empty table with the new schema
+            # Need to provide empty arrays for each field in the schema
+            empty_arrays = []
+            for field in schema:
+                empty_array = pa.array([], type=field.type)
+                empty_arrays.append(empty_array)
+            empty_table = pa.table(empty_arrays, schema=schema)
+            
+            write_deltalake(
+                table_or_uri=self.log_uri,
+                data=empty_table,
+                mode="append",
+                schema_mode="merge",
+                storage_options=self.storage_options
+            )
+            L.debug(f"Added schema metadata change for {self.table_name}")
+            # Update delta_log reference after schema change
+            try:
+                self._log_exists()
+            except Exception as e:
+                L.warning(f"Failed to refresh delta log after schema change: {e}")
+        except Exception as e:
+            L.error(f"Failed to add schema metadata change for {self.table_name}: {e}")
+            raise DeltaError(f"Failed to add schema metadata change: {e}")
 
     def add_transaction(
         self, 

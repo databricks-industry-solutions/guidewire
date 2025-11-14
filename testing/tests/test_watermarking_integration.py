@@ -925,20 +925,24 @@ class TestWatermarkingIntegration:
                 delta_log.delta_log = Mock()
                 delta_log.delta_log.history.return_value = [{"watermark": "invalid", "schema_timestamp": "invalid"}]
                 
-                watermark_info = delta_log._get_watermark_from_log()
-                # Should handle invalid values gracefully
-                assert watermark_info["watermark"] == 0
-                assert watermark_info["schema_timestamp"] == 0
+                # Should raise DeltaError when invalid values are found in existing table
+                with pytest.raises(Exception) as exc_info:
+                    delta_log._get_watermark_from_log()
+                
+                # Verify it's a DeltaError with appropriate message
+                assert "No valid watermarks found" in str(exc_info.value)
             
             # Test 2: Exception during watermark retrieval
             with patch.object(delta_log, 'table_exists', return_value=True):
                 delta_log.delta_log = Mock()
                 delta_log.delta_log.history.side_effect = Exception("Test error")
                 
-                watermark_info = delta_log._get_watermark_from_log()
-                # Should return defaults on exception
-                assert watermark_info["watermark"] == 0
-                assert watermark_info["schema_timestamp"] == 0
+                # Should raise DeltaError on exception
+                with pytest.raises(Exception) as exc_info:
+                    delta_log._get_watermark_from_log()
+                
+                # Verify it's a DeltaError with appropriate message
+                assert "Failed to get watermark from log" in str(exc_info.value)
             
             # Test 3: Result error handling
             result = Result(

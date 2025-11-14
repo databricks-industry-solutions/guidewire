@@ -9,9 +9,9 @@ version = "0.1.2"
 dependencies = [
     "pyarrow==21.0.0",
     "ray[default]==2.45.0",
-    "deltalake==1.1.4",
+    "deltalake==1.2.1",
     "rich==14.1.0",
-    'importlib-metadata; python_version<"3.10"',
+    'importlib-metadata; python_version>"3.10"',
 ]
 
 [project.optional-dependencies]
