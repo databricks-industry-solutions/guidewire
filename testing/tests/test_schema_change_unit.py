@@ -347,3 +347,166 @@ class TestEmptyTableCreation:
         assert empty_table.schema.equals(schema)
         assert "metadata" in empty_table.column_names
         assert "tags" in empty_table.column_names
+
+
+class TestSchemaNullabilityEnforcement:
+    """Unit tests for schema nullable enforcement."""
+    
+    @pytest.mark.unit
+    def test_make_schema_nullable_basic(self):
+        """Test that _make_schema_nullable converts all fields to nullable=True."""
+        # Create a mock delta log instance
+        delta_log = AWSDeltaLog.__new__(AWSDeltaLog)
+        
+        # Create schema with non-nullable fields
+        non_nullable_schema = pa.schema([
+            pa.field("id", pa.int64(), nullable=False),
+            pa.field("name", pa.string(), nullable=False),
+            pa.field("price", pa.float64(), nullable=False)
+        ])
+        
+        # Apply nullable transformation
+        nullable_schema = delta_log._make_schema_nullable(non_nullable_schema)
+        
+        # Verify all fields are nullable
+        for field in nullable_schema:
+            assert field.nullable is True, f"Field {field.name} should be nullable"
+        
+        # Verify field names and types are preserved
+        assert len(nullable_schema) == 3
+        assert nullable_schema.field("id").type == pa.int64()
+        assert nullable_schema.field("name").type == pa.string()
+        assert nullable_schema.field("price").type == pa.float64()
+    
+    @pytest.mark.unit
+    def test_make_schema_nullable_mixed(self):
+        """Test _make_schema_nullable with mixed nullable and non-nullable fields."""
+        delta_log = AzureDeltaLog.__new__(AzureDeltaLog)
+        
+        # Create schema with mixed nullable fields
+        mixed_schema = pa.schema([
+            pa.field("id", pa.int64(), nullable=False),
+            pa.field("name", pa.string(), nullable=True),
+            pa.field("optional_field", pa.float64(), nullable=True),
+            pa.field("required_field", pa.bool_(), nullable=False)
+        ])
+        
+        # Apply nullable transformation
+        nullable_schema = delta_log._make_schema_nullable(mixed_schema)
+        
+        # Verify all fields are now nullable (even those that were already nullable)
+        for field in nullable_schema:
+            assert field.nullable is True, f"Field {field.name} should be nullable"
+    
+    @pytest.mark.unit
+    def test_make_schema_nullable_complex_types(self):
+        """Test _make_schema_nullable with complex data types."""
+        delta_log = AWSDeltaLog.__new__(AWSDeltaLog)
+        
+        # Create schema with complex types
+        complex_schema = pa.schema([
+            pa.field("id", pa.int64(), nullable=False),
+            pa.field("tags", pa.list_(pa.string()), nullable=False),
+            pa.field("metadata", pa.struct([
+                pa.field("version", pa.int32()),
+                pa.field("source", pa.string())
+            ]), nullable=False),
+            pa.field("timestamp", pa.timestamp('us'), nullable=False)
+        ])
+        
+        # Apply nullable transformation
+        nullable_schema = delta_log._make_schema_nullable(complex_schema)
+        
+        # Verify all top-level fields are nullable
+        for field in nullable_schema:
+            assert field.nullable is True, f"Field {field.name} should be nullable"
+        
+        # Verify types are preserved
+        assert nullable_schema.field("tags").type == pa.list_(pa.string())
+        assert nullable_schema.field("timestamp").type == pa.timestamp('us')
+    
+    @pytest.mark.unit
+    def test_add_transaction_applies_nullable_to_schema(self):
+        """Test that add_transaction properly converts schema to nullable before writing."""
+        from deltalake.schema import Schema as DeltaSchema
+        
+        # Create a mock delta log instance
+        delta_log = AWSDeltaLog.__new__(AWSDeltaLog)
+        delta_log.log_uri = "s3://test-bucket/test-table/"
+        delta_log.storage_options = {"aws_access_key_id": "test"}
+        delta_log.table_name = "test_table"
+        delta_log.delta_log = None  # Simulate new table
+        
+        # Create schema with non-nullable fields
+        non_nullable_schema = pa.schema([
+            pa.field("id", pa.int64(), nullable=False),
+            pa.field("name", pa.string(), nullable=False)
+        ])
+        
+        parquet_info = [{
+            "path": "s3a://test-bucket/test-table/part-00000.parquet",
+            "size": 1024,
+            "last_modified": 1234567890
+        }]
+        
+        # Mock the create_table_with_add_actions function
+        with patch('guidewire.delta_log.create_table_with_add_actions') as mock_create, \
+             patch.object(delta_log, '_log_exists'):
+            
+            # Call add_transaction with non-nullable schema
+            delta_log.add_transaction(
+                parquets=parquet_info,
+                schema=non_nullable_schema,
+                watermark=1234567890,
+                schema_timestamp=1234567890,
+                mode="overwrite"
+            )
+            
+            # Verify create_table_with_add_actions was called
+            mock_create.assert_called_once()
+            call_args = mock_create.call_args
+            
+            # Get the schema that was passed
+            passed_schema = call_args[1]['schema']
+            
+            # Verify it's a DeltaSchema
+            assert isinstance(passed_schema, DeltaSchema)
+            
+            # Convert back to PyArrow to check nullability
+            passed_pa_schema = passed_schema.to_arrow()
+            
+            # Verify all fields are nullable
+            for field in passed_pa_schema:
+                assert field.nullable is True, f"Field {field.name} should be nullable in delta table"
+    
+    @pytest.mark.unit
+    def test_add_schema_metadata_change_applies_nullable(self):
+        """Test that add_schema_metadata_change properly converts schema to nullable."""
+        delta_log = AzureDeltaLog.__new__(AzureDeltaLog)
+        delta_log.log_uri = "abfss://container@account.dfs.core.windows.net/test-table/"
+        delta_log.storage_options = {}
+        delta_log.table_name = "test_table"
+        
+        # Create schema with non-nullable fields
+        non_nullable_schema = pa.schema([
+            pa.field("id", pa.int64(), nullable=False),
+            pa.field("new_field", pa.string(), nullable=False)
+        ])
+        
+        # Mock the write_deltalake function
+        with patch('guidewire.delta_log.write_deltalake') as mock_write, \
+             patch.object(delta_log, '_log_exists'):
+            
+            # Call add_schema_metadata_change with non-nullable schema
+            delta_log.add_schema_metadata_change(non_nullable_schema)
+            
+            # Verify write_deltalake was called
+            mock_write.assert_called_once()
+            call_args = mock_write.call_args
+            
+            # Get the empty table that was passed
+            empty_table = call_args[1]['data']
+            
+            # Verify all fields in the table schema are nullable
+            for field in empty_table.schema:
+                assert field.nullable is True, f"Field {field.name} should be nullable in schema metadata change"

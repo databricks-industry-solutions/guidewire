@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from time import sleep
 from deltalake.transaction import AddAction, create_table_with_add_actions, CommitProperties
 from deltalake.exceptions import TableNotFoundError
-from deltalake.schema import Schema
+from deltalake.schema import Schema as DeltaSchema
 from deltalake import DeltaTable, PostCommitHookProperties, write_deltalake
 import pyarrow as pa
 from guidewire.logging import logger as L
@@ -130,6 +130,21 @@ class BaseDeltaLog(ABC):
         if not isinstance(parquet["last_modified"], int) or parquet["last_modified"] < 0:
             raise DeltaValidationError("Parquet last_modified must be a non-negative integer")
 
+    def _make_schema_nullable(self, schema: pa.Schema) -> pa.Schema:
+        """Convert all fields in a schema to nullable=True.
+        
+        Args:
+            schema: PyArrow Schema to convert
+            
+        Returns:
+            pa.Schema: New schema with all fields set to nullable=True
+        """
+
+        return pa.schema([
+            pa.field(field.name, field.type, nullable=True) 
+            for field in schema
+        ])
+
     def _get_watermark_from_log(self) -> dict[str, int]:
         """Get the watermark and schema timestamp from the Delta log entry with fallback strategy.
         
@@ -200,17 +215,18 @@ class BaseDeltaLog(ABC):
         """Add an empty metadata schema merge operation for schema changes.
         
         Args:
-            schema: PyArrow schema for the new schema structure
+            schema: PyArrow Schema for the new schema structure
         """
         try:
             #is there a chance that the latest watermark is not there
             # Create an empty table with the new schema
             # Need to provide empty arrays for each field in the schema
+            nullable_schema = self._make_schema_nullable(schema)
             empty_arrays = []
             for field in schema:
                 empty_array = pa.array([], type=field.type)
                 empty_arrays.append(empty_array)
-            empty_table = pa.table(empty_arrays, schema=schema)
+            empty_table = pa.table(empty_arrays, schema=nullable_schema)
             
             write_deltalake(
                 table_or_uri=self.log_uri,
@@ -273,13 +289,17 @@ class BaseDeltaLog(ABC):
             )
 
         try:
-            schema = Schema.from_arrow(schema)
+
+            # Make schema nullable for both create and append operations
+            nullable_pa_schema = self._make_schema_nullable(schema)
+            # Convert PyArrow schema to deltalake Schema for delta-rs operations
+            nullable_delta_schema = DeltaSchema.from_arrow(nullable_pa_schema)
             commit_properties = CommitProperties(custom_metadata={"watermark": str(watermark), "schema_timestamp": str(schema_timestamp)})
             if self.delta_log is None:
                 L.debug(f"Creating new table: {self.table_name}")       
                 create_table_with_add_actions(
                     table_uri=self.log_uri,
-                    schema=schema,
+                    schema=nullable_delta_schema,
                     add_actions=actions,
                     mode="overwrite",
                     partition_by=[],
@@ -297,7 +317,7 @@ class BaseDeltaLog(ABC):
                 L.debug(f"Adding to table: {self.table_name} - watermark: {watermark}")
                 
                 self.delta_log.create_write_transaction(
-                    actions=actions, mode=mode, schema=schema, partition_by=[],
+                    actions=actions, mode=mode, schema=nullable_delta_schema, partition_by=[],
                     commit_properties=commit_properties,
                 )
                 # This update is optional as it only refreshes the delta log reference. 
