@@ -230,11 +230,12 @@ class TestBaseDeltaLogWatermarkMethods:
         ]
         mock_delta_log.delta_log.history.return_value = mock_history
         
-        # Call the method
-        result = AWSDeltaLog._get_watermark_from_log(mock_delta_log)
+        # Should raise DeltaError when metadata is missing from existing table
+        with pytest.raises(Exception) as exc_info:
+            AWSDeltaLog._get_watermark_from_log(mock_delta_log)
         
-        # Should return defaults when metadata is missing
-        assert result == {"watermark": 0, "schema_timestamp": 0}
+        # Verify it's a DeltaError with appropriate message
+        assert "No valid watermarks found" in str(exc_info.value)
 
     @pytest.mark.unit
     def test_get_watermark_from_log_exception_handling(self):
@@ -247,11 +248,13 @@ class TestBaseDeltaLogWatermarkMethods:
         mock_delta_log.delta_log.history.side_effect = Exception("Test exception")
         
         with patch('guidewire.delta_log.L') as mock_logger:
-            result = AWSDeltaLog._get_watermark_from_log(mock_delta_log)
+            # Should raise DeltaError when exception occurs
+            with pytest.raises(Exception) as exc_info:
+                AWSDeltaLog._get_watermark_from_log(mock_delta_log)
             
-            # Should return defaults and log warning
-            assert result == {"watermark": 0, "schema_timestamp": 0}
-            mock_logger.warning.assert_called_once()
+            # Verify it's a DeltaError and logger was called
+            assert "Failed to get watermark from log" in str(exc_info.value)
+            mock_logger.error.assert_called_once()
 
     @pytest.mark.unit
     def test_get_watermark_from_log_invalid_values(self):
@@ -273,11 +276,13 @@ class TestBaseDeltaLogWatermarkMethods:
         mock_delta_log.delta_log.history.return_value = mock_history
         
         with patch('guidewire.delta_log.L') as mock_logger:
-            result = AWSDeltaLog._get_watermark_from_log(mock_delta_log)
+            # Should raise DeltaError when invalid values are found
+            with pytest.raises(Exception) as exc_info:
+                AWSDeltaLog._get_watermark_from_log(mock_delta_log)
             
-            # Should handle invalid values and return defaults
-            assert result == {"watermark": 0, "schema_timestamp": 0}
-            mock_logger.warning.assert_called_once()
+            # Verify it's a DeltaError with appropriate message
+            assert "No valid watermarks found" in str(exc_info.value)
+            mock_logger.error.assert_called_once()
 
     @pytest.mark.unit
     def test_get_watermark_from_log_empty_history(self):

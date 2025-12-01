@@ -339,6 +339,11 @@ class Batch:
             raise ValueError(error_message)
 
         if all_parquet_files:
+            # Check if this is a schema change and not partial
+            if not partial and self.log_entry.table_exists():
+                # Add schema metadata change operation first
+                self.log_entry.add_schema_metadata_change(self.cached_schema)
+            
             # Single commit with all files and latest timestamp as watermark
             L.debug(f"Committing {len(all_parquet_files)} files in batch for '{self.table_name}' with watermark {latest_timestamp}")
             self.log_entry.add_transaction(
@@ -346,7 +351,7 @@ class Batch:
                 schema=self.cached_schema,
                 watermark=latest_timestamp,  # Use latest timestamp as watermark
                 schema_timestamp=schema_timestamp,
-                mode="overwrite" if not partial else "append",
+                mode="append",
             )
             self.result.update(
                 process_finish_watermark=latest_timestamp,
@@ -373,12 +378,18 @@ class Batch:
                 self.result.add_schema_timestamp(schema_timestamp)
                 if self._schema_finder(files_in_timestamp):
                     first_folder_for_schema = False
+                    
+                    # Check if this is a schema change and not partial
+                    if not partial and self.log_entry.table_exists():
+                        # Add schema metadata change operation first
+                        self.log_entry.add_schema_metadata_change(self.cached_schema)
+                    
                     self.log_entry.add_transaction(
                         parquets=files_in_timestamp,
                         schema=self.cached_schema,
                         watermark=timestamp_value,
                         schema_timestamp=schema_timestamp,
-                        mode="overwrite" if not partial else "append",
+                        mode="append",
                     )
                 else:
                     error_message = f"Schema not found for '{self.table_name} {folder}'"
