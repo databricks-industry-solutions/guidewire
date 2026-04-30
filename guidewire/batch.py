@@ -4,6 +4,7 @@ from pyarrow.fs import FileType
 from guidewire.logging import logger as L
 from guidewire.delta_log import AzureDeltaLog, AWSDeltaLog
 from guidewire.manifest import Manifest
+from guidewire.storage import BaseStorage
 from typing import Optional
 from guidewire.results import Result
 from datetime import datetime
@@ -22,9 +23,10 @@ class Batch:
         progress_manager = None,
         parallel: bool = False,
         maintain_timestamp_transactions: bool = True,
+        target_storage: Optional[BaseStorage] = None,
     ):
         """Initialize a new Batch instance.
-        
+
         Args:
             table_name: Name of the table to process
             manifest: Manifest object containing file information
@@ -36,6 +38,11 @@ class Batch:
             progress_manager: Optional progress manager (Ray actor if parallel=True)
             parallel: Whether this batch is running in parallel mode with Ray
             maintain_timestamp_transactions: Whether to maintain timestamp transactions (default: True)
+            target_storage: Optional pre-configured storage instance for the
+                target Delta log. AWS-only today. When omitted, the legacy
+                ``AWSStorage(prefix="TARGET")`` default is used. Pass a
+                :class:`guidewire.storage.UCStorage` instance to write the
+                Delta log under Unity Catalog governance.
         Raises:
             ValueError: If required parameters are invalid
         """
@@ -47,7 +54,7 @@ class Batch:
             raise ValueError("storage_or_s3_name must be a non-empty string")
         if target_cloud == "azure" and (not storage_container or not isinstance(storage_container, str)):
             raise ValueError("storage_container must be a non-empty string for Azure target cloud")
-            
+
         self.table_name = table_name
         self.manifest = manifest
         self.entry = self.manifest.read(entry=self.table_name)
@@ -66,6 +73,7 @@ class Batch:
                 bucket_name=storage_or_s3_name,
                 table_name=self.table_name,
                 subfolder=subfolder,
+                storage=target_storage,
             )
         else:
             raise ValueError(f"Invalid target_cloud: {target_cloud}. Must be 'azure' or 'aws'")
@@ -210,11 +218,20 @@ class Batch:
 
 
     def _get_parquet_list(self, directory: str) -> list[dict]:
-        """Returns a list of parquet files with metadata from the given directory."""
+        """Returns a list of parquet files with metadata from the given directory.
+
+        The AddAction ``path`` is delegated to the target storage's
+        :meth:`guidewire.storage.BaseStorage.log_action_path`. This is
+        polymorphic: :class:`AWSStorage` returns the legacy ``s3a://...``
+        absolute path; :class:`UCStorage` returns a path relative to the
+        table root (or raises if the source isn't enclosed by the root).
+        """
+        target_fs = self.log_entry.fs
+        table_root = self.log_entry.log_uri
         return [
             {
                 "relative_path": file.path,
-                "path": f"s3a://{file.path}",
+                "path": target_fs.log_action_path(file.path, table_root),
                 "last_modified": file.mtime_ns,
                 "size": file.size,
             }

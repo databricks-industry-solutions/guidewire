@@ -6,7 +6,7 @@ from deltalake.schema import Schema as DeltaSchema
 from deltalake import DeltaTable, PostCommitHookProperties, write_deltalake
 import pyarrow as pa
 from guidewire.logging import logger as L
-from guidewire.storage import AzureStorage, AWSStorage
+from guidewire.storage import AzureStorage, AWSStorage, BaseStorage
 from typing import List, Dict, Optional, Union, Literal
 import os
 
@@ -412,28 +412,35 @@ class AWSDeltaLog(BaseDeltaLog):
         bucket_name: str,
         table_name: str,
         subfolder: Optional[str] = None,
+        storage: Optional[BaseStorage] = None,
     ) -> None:
         """Initialize the AWS S3 Delta log instance.
-        
+
         Args:
             bucket_name: The S3 bucket name
             table_name: The name of the Delta table
             subfolder: Optional subfolder path
-            
+            storage: Optional pre-configured storage instance. If omitted,
+                an :class:`AWSStorage` is constructed with the ``TARGET``
+                env-var prefix (legacy behavior). Pass a :class:`UCStorage`
+                instance to write the Delta log under Unity Catalog
+                governance with credential vending.
+
         Raises:
             DeltaValidationError: If any of the required parameters are empty
         """
         super().__init__()
-        
+
         if not all([bucket_name, table_name]):
             raise DeltaValidationError("bucket_name and table_name must be non-empty strings")
-        
+
         self.bucket_name = bucket_name
         self.table_name = table_name
         self.subfolder = subfolder
-        
-        # Initialize AWS storage with TARGET prefix for delta table writing credentials
-        self.fs = AWSStorage(prefix="TARGET")
+
+        # Use the caller-supplied storage if present; otherwise preserve the
+        # legacy default of AWSStorage(prefix="TARGET").
+        self.fs = storage if storage is not None else AWSStorage(prefix="TARGET")
         self.storage_options = self.fs.storage_options
         
         # Construct log URI and check if log exists

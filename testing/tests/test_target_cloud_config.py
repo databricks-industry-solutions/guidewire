@@ -7,11 +7,12 @@ without requiring external cloud services.
 
 import pytest
 import os
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
 from guidewire.processor import Processor
 from guidewire.delta_log import AzureDeltaLog, AWSDeltaLog, DeltaValidationError
-from guidewire.storage import AWSStorage
+from guidewire.storage import AWSStorage, AzureStorage, UCStorage
 
 
 @pytest.mark.unit
@@ -387,8 +388,163 @@ class TestTargetCloudConfiguration:
         
         with patch.dict(os.environ, env_vars, clear=True):
             storage = AWSStorage(prefix="TARGET")
-            
+
             assert storage._storage_options["region"] == "us-west-2"
             assert storage._storage_options["access_key_id"] == "target-key"
-            assert storage._storage_options["secret_access_key"] == "target-secret"  
+            assert storage._storage_options["secret_access_key"] == "target-secret"
             assert storage._storage_options["endpoint"] == "https://s3.us-west-2.amazonaws.com"
+
+    # -----------------------------------------------------------------
+    # Tests for log_action_path polymorphism and the optional
+    # ``storage`` parameter on AWSDeltaLog. Together these confirm that
+    # opting in to UCStorage produces relative-path AddActions while every
+    # existing call site keeps emitting absolute s3a:// paths.
+    # -----------------------------------------------------------------
+
+    def test_storage_aws_log_action_path_legacy(self):
+        """AWSStorage.log_action_path returns the legacy absolute s3a:// path.
+
+        Backward-compatibility regression guard: any existing caller that
+        does not opt into UCStorage must see an unchanged AddAction path
+        format.
+        """
+        env_vars = {
+            "AWS_REGION": "us-east-1",
+            "AWS_ACCESS_KEY_ID": "k",
+            "AWS_SECRET_ACCESS_KEY": "s",
+        }
+        with patch.dict(os.environ, env_vars, clear=True):
+            storage = AWSStorage()
+            assert storage.log_action_path(
+                file_path="my-bucket/schema_hash/20260101T000000Z/part-0.parquet",
+                table_root="s3://my-bucket/cc_claim/",
+            ) == "s3a://my-bucket/schema_hash/20260101T000000Z/part-0.parquet"
+
+    def test_storage_azure_log_action_path_legacy(self):
+        """AzureStorage inherits the BaseStorage default log_action_path."""
+        env_vars = {
+            "AZURE_STORAGE_ACCOUNT_NAME": "acct",
+            "AZURE_STORAGE_ACCOUNT_KEY": "k",
+        }
+        with patch.dict(os.environ, env_vars, clear=True):
+            storage = AzureStorage()
+            assert storage.log_action_path(
+                file_path="container/path/file.parquet",
+                table_root="abfss://c@a.dfs.core.windows.net/t/",
+            ) == "s3a://container/path/file.parquet"
+
+    def test_delta_log_aws_default_storage_unchanged(self):
+        """AWSDeltaLog without `storage=` still constructs AWSStorage(prefix='TARGET').
+
+        Backward-compatibility regression guard: the no-arg call shape used
+        throughout the existing codebase keeps its meaning.
+        """
+        env_vars = {
+            "AWS_TARGET_REGION": "us-east-1",
+            "AWS_TARGET_ACCESS_KEY_ID": "tk",
+            "AWS_TARGET_SECRET_ACCESS_KEY": "ts",
+        }
+        with patch.dict(os.environ, env_vars, clear=True):
+            with patch.object(AWSDeltaLog, '_log_exists'):
+                delta_log = AWSDeltaLog(bucket_name="b", table_name="t")
+                assert isinstance(delta_log.fs, AWSStorage)
+                assert delta_log.fs._storage_options["access_key_id"] == "tk"
+
+    @staticmethod
+    def _build_uc_response(
+        access_key_id="vended-ak",
+        secret_access_key="vended-sk",
+        session_token="vended-st",
+        expiration_time=None,
+    ):
+        """Construct a mock GenerateTemporaryTableCredentialResponse."""
+        if expiration_time is None:
+            # Default: 1 hour in the future, in epoch ms (per SDK contract).
+            expiration_time = int(datetime.now(timezone.utc).timestamp() * 1000) + 3_600_000
+        resp = MagicMock()
+        resp.aws_temp_credentials.access_key_id = access_key_id
+        resp.aws_temp_credentials.secret_access_key = secret_access_key
+        resp.aws_temp_credentials.session_token = session_token
+        resp.expiration_time = expiration_time
+        return resp
+
+    def test_storage_uc_init(self):
+        """UCStorage init populates storage_options with vended credentials."""
+        with patch('guidewire.storage.WorkspaceClient') as mock_wc_cls:
+            mock_wc_cls.return_value.temporary_table_credentials.generate_temporary_table_credentials.return_value = (
+                self._build_uc_response()
+            )
+
+            storage = UCStorage(uc_table_id="abc-123", region="us-east-1")
+
+            opts = storage.storage_options
+            assert opts["region"] == "us-east-1"
+            assert opts["access_key_id"] == "vended-ak"
+            assert opts["secret_access_key"] == "vended-sk"
+            assert opts["session_token"] == "vended-st"
+            # Confirm the SDK was called with the right operation enum.
+            call_kwargs = mock_wc_cls.return_value.temporary_table_credentials.generate_temporary_table_credentials.call_args.kwargs
+            assert call_kwargs["table_id"] == "abc-123"
+
+    def test_storage_uc_log_action_path_relative(self):
+        """UCStorage.log_action_path emits a path relative to the table root."""
+        with patch('guidewire.storage.WorkspaceClient') as mock_wc_cls:
+            mock_wc_cls.return_value.temporary_table_credentials.generate_temporary_table_credentials.return_value = (
+                self._build_uc_response()
+            )
+            storage = UCStorage(uc_table_id="t1")
+
+            relative = storage.log_action_path(
+                file_path="my-bucket/cc_claim/schema_hash/20260101T000000Z/part-0.parquet",
+                table_root="s3://my-bucket/cc_claim/",
+            )
+            assert relative == "schema_hash/20260101T000000Z/part-0.parquet"
+
+    def test_storage_uc_log_action_path_cross_bucket_raises(self):
+        """UCStorage rejects source files outside the target table root."""
+        with patch('guidewire.storage.WorkspaceClient') as mock_wc_cls:
+            mock_wc_cls.return_value.temporary_table_credentials.generate_temporary_table_credentials.return_value = (
+                self._build_uc_response()
+            )
+            storage = UCStorage(uc_table_id="t1")
+
+            with pytest.raises(ValueError, match="UC governance requires"):
+                storage.log_action_path(
+                    file_path="other-bucket/some/path/file.parquet",
+                    table_root="s3://my-bucket/cc_claim/",
+                )
+
+    def test_storage_uc_credentials_refresh_before_expiry(self):
+        """Accessing storage_options near expiry triggers a re-vend."""
+        with patch('guidewire.storage.WorkspaceClient') as mock_wc_cls:
+            gen = mock_wc_cls.return_value.temporary_table_credentials.generate_temporary_table_credentials
+            # First call (in __init__): credentials expire in 60s — well within the 300s buffer.
+            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            gen.return_value = self._build_uc_response(expiration_time=now_ms + 60_000)
+
+            storage = UCStorage(uc_table_id="t1")
+            assert gen.call_count == 1
+
+            # Second call (during storage_options access): plenty of headroom.
+            gen.return_value = self._build_uc_response(expiration_time=now_ms + 3_600_000)
+
+            _ = storage.storage_options  # property access should trigger refresh
+            assert gen.call_count == 2
+
+    def test_delta_log_aws_with_uc_storage_param(self):
+        """AWSDeltaLog uses caller-supplied storage instead of constructing AWSStorage."""
+        with patch('guidewire.storage.WorkspaceClient') as mock_wc_cls:
+            mock_wc_cls.return_value.temporary_table_credentials.generate_temporary_table_credentials.return_value = (
+                self._build_uc_response()
+            )
+            uc = UCStorage(uc_table_id="t1", region="us-east-1")
+
+            with patch.object(AWSDeltaLog, '_log_exists'):
+                delta_log = AWSDeltaLog(
+                    bucket_name="b",
+                    table_name="t",
+                    storage=uc,
+                )
+
+                assert delta_log.fs is uc
+                assert "session_token" in delta_log.storage_options
