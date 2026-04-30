@@ -4,7 +4,8 @@ from pyarrow.fs import FileType
 from guidewire.logging import logger as L
 from guidewire.delta_log import AzureDeltaLog, AWSDeltaLog
 from guidewire.manifest import Manifest
-from guidewire.storage import BaseStorage
+from guidewire.storage import BaseStorage, UCStorage
+from guidewire.staging import StagingExecutor
 from typing import Optional
 from guidewire.results import Result
 from datetime import datetime
@@ -24,6 +25,7 @@ class Batch:
         parallel: bool = False,
         maintain_timestamp_transactions: bool = True,
         target_storage: Optional[BaseStorage] = None,
+        staging_mode: bool = False,
     ):
         """Initialize a new Batch instance.
 
@@ -43,6 +45,12 @@ class Batch:
                 ``AWSStorage(prefix="TARGET")`` default is used. Pass a
                 :class:`guidewire.storage.UCStorage` instance to write the
                 Delta log under Unity Catalog governance.
+            staging_mode: When True, copy each source parquet into the
+                target table root before recording its AddAction. This is
+                required for Guidewire CDA SaaS deployments where the source
+                bucket cannot be registered as a UC external location.
+                Requires ``target_storage`` to be a :class:`UCStorage`
+                instance and ``target_cloud='aws'``.
         Raises:
             ValueError: If required parameters are invalid
         """
@@ -77,6 +85,28 @@ class Batch:
             )
         else:
             raise ValueError(f"Invalid target_cloud: {target_cloud}. Must be 'azure' or 'aws'")
+        # Optional staging executor for UC-governed CDA pipelines.
+        # Constructed only when staging_mode=True; otherwise None and Batch
+        # behaves exactly as before.
+        self.staging_executor: Optional[StagingExecutor] = None
+        if staging_mode:
+            if not isinstance(target_storage, UCStorage):
+                raise ValueError(
+                    "staging_mode=True requires target_storage to be a UCStorage "
+                    "instance (staging only makes sense when the target is UC-governed)."
+                )
+            if target_cloud != "aws":
+                raise NotImplementedError(
+                    f"staging_mode=True is supported only for target_cloud='aws' in v1; "
+                    f"got target_cloud={target_cloud!r}."
+                )
+            self.staging_executor = StagingExecutor(
+                source_storage=self.manifest.fs,
+                target_storage=target_storage,
+                target_table_root=self.log_entry.log_uri,
+                source_table_root=self.entry["dataFilesPath"],
+            )
+
         self.watermark_info = self.log_entry._get_watermark_from_log()
         self.low_watermark = 0 if reset else self.watermark_info["watermark"]
         self.watermark_schema_timestamp = 0 if reset else self.watermark_info["schema_timestamp"]
@@ -220,14 +250,44 @@ class Batch:
     def _get_parquet_list(self, directory: str) -> list[dict]:
         """Returns a list of parquet files with metadata from the given directory.
 
-        The AddAction ``path`` is delegated to the target storage's
-        :meth:`guidewire.storage.BaseStorage.log_action_path`. This is
-        polymorphic: :class:`AWSStorage` returns the legacy ``s3a://...``
-        absolute path; :class:`UCStorage` returns a path relative to the
-        table root (or raises if the source isn't enclosed by the root).
+        Three behaviors, mutually exclusive:
+
+        1. **Legacy (no target_storage, no staging)**: ``log_action_path`` on
+           the default :class:`AWSStorage` returns absolute ``s3a://...``
+           paths -- bit-identical to the upstream behavior.
+        2. **UC mode without staging**: ``target_storage`` is a
+           :class:`UCStorage`; ``log_action_path`` emits paths relative to the
+           target table root. Source files must already be enclosed by the
+           target root (i.e. customer pre-staged or self-hosted CDA layout).
+        3. **UC mode with staging**: each source parquet is copied into the
+           target table root via :class:`StagingExecutor`, and the AddAction
+           records a path relative to that staged location.
+
+        The dispatch happens via polymorphism on the target storage; this
+        method does not know about specific storage subclasses.
         """
         target_fs = self.log_entry.fs
         table_root = self.log_entry.log_uri
+        source_files = [
+            file
+            for file in self.manifest.fs.get_file_info(directory)
+            if file.type == FileType.File and file.path.endswith(".parquet")
+        ]
+
+        if self.staging_executor is not None:
+            return [
+                {
+                    "relative_path": file.path,
+                    "path": target_fs.log_action_path(
+                        self.staging_executor.stage_file(file.path, file.size),
+                        table_root,
+                    ),
+                    "last_modified": file.mtime_ns,
+                    "size": file.size,
+                }
+                for file in source_files
+            ]
+
         return [
             {
                 "relative_path": file.path,
@@ -235,8 +295,7 @@ class Batch:
                 "last_modified": file.mtime_ns,
                 "size": file.size,
             }
-            for file in self.manifest.fs.get_file_info(directory)
-            if file.type == FileType.File and file.path.endswith(".parquet")
+            for file in source_files
         ]
 
     def _get_parquet_schema(self, path: str) -> pa.schema:

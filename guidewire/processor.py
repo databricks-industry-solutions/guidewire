@@ -1,20 +1,22 @@
 from typing import Tuple, Optional, Dict
 import os
 import ray
+from databricks.sdk import WorkspaceClient
 from guidewire.manifest import Manifest
 from guidewire.batch import Batch
 from guidewire.logging import logger as L
 from guidewire.results import Result
+from guidewire.storage import UCStorage
 from guidewire.progress_managers import SimpleProgressManager, MultiProgressManager
 class Processor:
     """A class to handle table processing operations."""
-    
-    def __init__(self, target_cloud: str, table_names: Tuple[str, ...] = None, parallel: bool = True, exceptions: list = None, show_progress: bool = True, maintain_timestamp_transactions: bool = True, largest_tables_first_count: int = None) -> None:
+
+    def __init__(self, target_cloud: str, table_names: Tuple[str, ...] = None, parallel: bool = True, exceptions: list = None, show_progress: bool = True, maintain_timestamp_transactions: bool = True, largest_tables_first_count: int = None, staging_mode: bool = False, uc_catalog: Optional[str] = None, uc_schema: Optional[str] = None, uc_region: Optional[str] = None) -> None:
         """Initialize the Processor with table names and parallel processing.
         if table_names is not provided, all tables in the manifest will be processed.
         if parallel is False, the tables will be processed sequentially.
         if parallel is True, the tables will be processed in parallel using Ray.
-        
+
         Args:
             target_cloud: Target cloud provider for delta tables ("azure" or "aws")
             table_names: Tuple of table names to process
@@ -23,16 +25,45 @@ class Processor:
             show_progress: Whether to show table progress (default: True)
             maintain_timestamp_transactions: Whether to maintain timestamp transactions (default: True)
             largest_tables_first_count: Number of largest tables to process first for optimization (default: None, disables ordering)
+            staging_mode: When True, copy each source parquet into the
+                UC-governed target before recording its AddAction. Required
+                for Guidewire CDA SaaS deployments where the source bucket
+                is not registerable as a UC external location. Requires
+                ``target_cloud='aws'`` and ``uc_catalog``/``uc_schema``.
+            uc_catalog: UC catalog name. Combined with ``uc_schema`` and the
+                table name, used to resolve each table's UC table_id at init
+                time via the Databricks SDK.
+            uc_schema: UC schema (database) name within ``uc_catalog``.
+            uc_region: AWS region for ``UCStorage``. Falls back to
+                ``AWS_REGION`` env var if omitted.
         """
         self.table_names = table_names
         self.exceptions = exceptions
         self.parallel = parallel
         self.target_cloud = target_cloud
-        
+
         # Store parameters directly
         self.show_progress = show_progress
         self.maintain_timestamp_transactions = maintain_timestamp_transactions
         self.largest_tables_first_count = largest_tables_first_count
+
+        # Staging-mode configuration. Resolution of UC table_ids is deferred
+        # until after the manifest has been loaded (we need table_names).
+        self.staging_mode = staging_mode
+        self.uc_catalog = uc_catalog
+        self.uc_schema = uc_schema
+        self.uc_region = uc_region
+        self._uc_table_ids: Dict[str, str] = {}
+        if self.staging_mode:
+            if self.target_cloud != "aws":
+                raise NotImplementedError(
+                    f"staging_mode is supported only for target_cloud='aws' in v1; "
+                    f"got target_cloud={self.target_cloud!r}."
+                )
+            if not (self.uc_catalog and self.uc_schema):
+                raise ValueError(
+                    "staging_mode=True requires uc_catalog and uc_schema to be set."
+                )
         
         self._validate_environment()
         
@@ -71,6 +102,35 @@ class Processor:
         
         # Initialize progress manager for sequential processing only if progress should be shown
         self.progress_manager = SimpleProgressManager(show_progress=True) if self.show_progress else None
+
+        # Resolve UC table_ids in staging mode. Done after table_names is
+        # finalised so we know exactly which tables to look up. Performed
+        # via Databricks SDK; the caller's default auth chain is used.
+        if self.staging_mode:
+            self._resolve_uc_table_ids()
+
+    def _resolve_uc_table_ids(self) -> None:
+        """Look up UC table_ids for every table_name via WorkspaceClient.
+
+        Builds ``self._uc_table_ids: Dict[table_name -> uc_table_id]``. Fails
+        loudly if any table is missing in UC -- the customer must register
+        them before running staging mode.
+        """
+        wc = WorkspaceClient()
+        for table_name in self.table_names:
+            full_name = f"{self.uc_catalog}.{self.uc_schema}.{table_name}"
+            try:
+                table_info = wc.tables.get(full_name=full_name)
+            except Exception as e:
+                raise RuntimeError(
+                    f"staging_mode: UC table {full_name!r} could not be resolved. "
+                    f"Pre-create the table in UC before running. ({e})"
+                )
+            if not table_info.table_id:
+                raise RuntimeError(
+                    f"staging_mode: UC returned an empty table_id for {full_name!r}."
+                )
+            self._uc_table_ids[table_name] = table_info.table_id
 
 
     def _validate_environment(self) -> None:
@@ -201,11 +261,22 @@ class Processor:
 
         
     @staticmethod
+    def _build_target_storage_for_staging(uc_table_id: Optional[str], uc_region: Optional[str]):
+        """Construct a UCStorage instance for staging if uc_table_id is provided.
+
+        Returns ``(target_storage, staging_mode)`` -- both ``None``/``False``
+        when ``uc_table_id`` is falsy (legacy / non-staging path).
+        """
+        if not uc_table_id:
+            return None, False
+        return UCStorage(uc_table_id=uc_table_id, region=uc_region), True
+
+    @staticmethod
     @ray.remote
-    def process_table_async(entry: str, manifest: Manifest, target_cloud: str, log_storage_account: str, log_storage_container: str, subfolder: str = None, tracker_actor = None, maintain_timestamp_transactions: bool = True) -> Optional[Result]:
+    def process_table_async(entry: str, manifest: Manifest, target_cloud: str, log_storage_account: str, log_storage_container: str, subfolder: str = None, tracker_actor = None, maintain_timestamp_transactions: bool = True, uc_table_id: Optional[str] = None, uc_region: Optional[str] = None) -> Optional[Result]:
         """
         Process a single table entry asynchronously with Ray.
-        
+
         Args:
             entry: The table name to process
             manifest: The manifest object containing table information
@@ -215,11 +286,14 @@ class Processor:
             subfolder: Optional subfolder name
             tracker_actor: Ray actor for progress tracking
             maintain_timestamp_transactions: Whether to maintain timestamp transactions
+            uc_table_id: When present, instantiate UCStorage and enable staging mode.
+            uc_region: AWS region passed to UCStorage.
         """
         batch_result = None
         try:
             manifest_entry = manifest.read(entry)
             if manifest_entry:
+                target_storage, staging_mode = Processor._build_target_storage_for_staging(uc_table_id, uc_region)
                 batch_result = Batch(
                     table_name=entry,
                     manifest=manifest,
@@ -230,6 +304,8 @@ class Processor:
                     progress_manager=tracker_actor,  # Pass Ray actor directly
                     parallel=True,  # This is the async parallel processing path
                     maintain_timestamp_transactions=maintain_timestamp_transactions,
+                    target_storage=target_storage,
+                    staging_mode=staging_mode,
                 ).process_batch()
                 return batch_result
             else:
@@ -238,10 +314,10 @@ class Processor:
             return batch_result
 
     @staticmethod
-    def process_table(entry: str, manifest: Manifest, target_cloud: str, log_storage_account: str, log_storage_container: str, subfolder: str = None, progress_manager = None, maintain_timestamp_transactions: bool = True) -> Optional[Result]:
+    def process_table(entry: str, manifest: Manifest, target_cloud: str, log_storage_account: str, log_storage_container: str, subfolder: str = None, progress_manager = None, maintain_timestamp_transactions: bool = True, uc_table_id: Optional[str] = None, uc_region: Optional[str] = None) -> Optional[Result]:
         """
         Process a single table entry sequentially (non-parallel).
-        
+
         Args:
             entry: The table name to process
             manifest: The manifest object containing table information
@@ -251,11 +327,14 @@ class Processor:
             subfolder: Optional subfolder name
             progress_manager: Optional progress manager
             maintain_timestamp_transactions: Whether to maintain timestamp transactions
+            uc_table_id: When present, instantiate UCStorage and enable staging mode.
+            uc_region: AWS region passed to UCStorage.
         """
         batch_result = None
         try:
             manifest_entry = manifest.read(entry)
             if manifest_entry:
+                target_storage, staging_mode = Processor._build_target_storage_for_staging(uc_table_id, uc_region)
                 batch_result = Batch(
                     table_name=entry,
                     manifest=manifest,
@@ -266,6 +345,8 @@ class Processor:
                     progress_manager=progress_manager,
                     parallel=False,  # This is the sequential processing path
                     maintain_timestamp_transactions=maintain_timestamp_transactions,
+                    target_storage=target_storage,
+                    staging_mode=staging_mode,
                 ).process_batch()
                 return batch_result
             else:
@@ -298,21 +379,23 @@ class Processor:
                     tracker_actor = multi_progress.get_tracker_actor()
                     futures = [
                         self.process_table_async.remote(
-                            entry, self.manifest, self.target_cloud, 
-                            self.log_storage_account, self.log_storage_container, 
-                            self.subfolder, tracker_actor, self.maintain_timestamp_transactions
+                            entry, self.manifest, self.target_cloud,
+                            self.log_storage_account, self.log_storage_container,
+                            self.subfolder, tracker_actor, self.maintain_timestamp_transactions,
+                            self._uc_table_ids.get(entry), self.uc_region,
                         )
                         for entry in self.table_names
-                    ]      
+                    ]
                     self.results = multi_progress.wait_for_completion(futures)
                     multi_progress.stop()
                 else:
                     # No progress manager, just wait for completion normally
                     futures = [
                         self.process_table_async.remote(
-                            entry, self.manifest, self.target_cloud, 
-                            self.log_storage_account, self.log_storage_container, 
-                            self.subfolder, None, self.maintain_timestamp_transactions
+                            entry, self.manifest, self.target_cloud,
+                            self.log_storage_account, self.log_storage_container,
+                            self.subfolder, None, self.maintain_timestamp_transactions,
+                            self._uc_table_ids.get(entry), self.uc_region,
                         )
                         for entry in self.table_names
                     ]
@@ -327,7 +410,13 @@ class Processor:
                         self.progress_manager.register_table(table_name)
                 
                 for entry in self.table_names:
-                    result = self.process_table(entry, self.manifest, self.target_cloud, self.log_storage_account, self.log_storage_container, self.subfolder, self.progress_manager, self.maintain_timestamp_transactions)
+                    result = self.process_table(
+                        entry, self.manifest, self.target_cloud,
+                        self.log_storage_account, self.log_storage_container,
+                        self.subfolder, self.progress_manager,
+                        self.maintain_timestamp_transactions,
+                        self._uc_table_ids.get(entry), self.uc_region,
+                    )
                     self.results.append(result)
                     
                 if progress_display and self.progress_manager:

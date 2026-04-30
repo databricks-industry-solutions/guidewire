@@ -10,6 +10,7 @@ from .manifest import Manifest
 from .results import Result
 from .delta_log import AzureDeltaLog, AWSDeltaLog, DeltaError, DeltaValidationError
 from .storage import AzureStorage, AWSStorage, BaseStorage, UCStorage
+from .staging import StagingExecutor
 from .progress_managers import SimpleProgressManager, MultiProgressManager
 
 __version__ = "0.0.4"
@@ -28,6 +29,7 @@ __all__ = [
     "AWSStorage",
     "BaseStorage",
     "UCStorage",
+    "StagingExecutor",
     "SimpleProgressManager",
     "MultiProgressManager", 
 ]
