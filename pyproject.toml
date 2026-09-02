@@ -18,7 +18,7 @@ dependencies = [
 test = [
     "pytest==8.4.1",
     "boto3==1.40.23",
-    "requests==2.32.3",
+    "requests==2.33.0",
     "azure-storage-blob==12.26.0",
     "faker==23.7.0",
 ]
