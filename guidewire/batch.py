@@ -333,6 +333,23 @@ class Batch:
             self._update_progress_safe(i + 1, len(valid_timestamp_folders))
 
         if not schema_found:
+            # A drained fingerprint (no timestamp folders remain above the low watermark) is a normal,
+            # expected state after a schema change: every folder for this schema-version hash has already
+            # been ingested, so there is simply nothing new to read here. In that case we must NOT raise -
+            # raising abandons the whole table loop in process_batch() before the NEWER fingerprint(s) in
+            # schema_history_list are ever processed, which silently stalls the table while the job stays
+            # green. Instead, log a warning and return so process_batch() advances to the next fingerprint.
+            # Only raise the genuine failure: folders DID exist for this fingerprint but none yielded a
+            # readable parquet schema.
+            if not valid_timestamp_folders:
+                warning_message = (
+                    f"No unprocessed timestamp folders for '{self.table_name} {folder}' "
+                    f"(drained fingerprint above low watermark {self.low_watermark}); "
+                    f"skipping to next fingerprint."
+                )
+                self._log_warning(warning_message)
+                self._complete_table_safe()
+                return
             error_message = f"Schema not found for '{self.table_name} {folder}'"
             self._log_error(error_message)
             self._complete_table_safe(error_message)
