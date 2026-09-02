@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 name = "guidewire-cda-delta-clone"
 version = "0.2.1"
 dependencies = [
-    "pyarrow==21.0.0",
+    "pyarrow==23.0.1",
     "ray[default]==2.45.0",
     "deltalake==1.2.1",
     "rich==14.1.0",
